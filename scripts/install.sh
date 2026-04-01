@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─── BR10 Network Manager - Script de Instalação ─────────────────────────────
+# Suporte: Ubuntu 22.04 LTS e Debian 12
 # Uso: sudo bash install.sh
-# Testado em: Ubuntu 22.04 LTS
 
 set -euo pipefail
 
@@ -23,6 +23,11 @@ error(){ echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 # ─── Verificar root ──────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && error "Execute como root: sudo bash install.sh"
 
+# Detectar distribuição
+OS_ID=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"' || echo "unknown")
+OS_VERSION=$(grep -oP '(?<=^VERSION_ID=).+' /etc/os-release | tr -d '"' || echo "0")
+log "Sistema detectado: $OS_ID $OS_VERSION"
+
 log "═══════════════════════════════════════════════════"
 log "   BR10 Network Manager - Instalação"
 log "   Domínio: $DOMAIN"
@@ -30,67 +35,89 @@ log "═════════════════════════
 
 # ─── 1. Atualizar sistema ────────────────────────────────────────────────────
 log "1/10 Atualizando sistema..."
-apt-get update -qq && apt-get upgrade -y -qq
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
 
 # ─── 2. Instalar dependências ────────────────────────────────────────────────
 log "2/10 Instalando dependências..."
-apt-get install -y -qq \
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     curl wget git unzip \
     ca-certificates gnupg lsb-release \
     ufw fail2ban net-tools lsof \
-    certbot python3-certbot-nginx
+    certbot
 
 # ─── 3. Liberar portas 80 e 443 ─────────────────────────────────────────────
 log "3/10 Liberando portas 80 e 443..."
 
-# Parar e desabilitar Apache2 (instalado por padrão em algumas VPS)
-if systemctl is-active --quiet apache2 2>/dev/null; then
-    warn "Apache2 detectado e em execução. Parando e desabilitando..."
-    systemctl stop apache2
-    systemctl disable apache2
-    log "Apache2 parado e desabilitado."
-fi
-
-# Parar e desabilitar Nginx nativo do Ubuntu (se existir)
-if systemctl is-active --quiet nginx 2>/dev/null; then
-    warn "Nginx nativo detectado e em execução. Parando e desabilitando..."
-    systemctl stop nginx
-    systemctl disable nginx
-    log "Nginx nativo parado e desabilitado."
-fi
-
-# Verificar se as portas ainda estão em uso por outro processo
-for PORT in 80 443; do
-    PID=$(lsof -ti :"$PORT" 2>/dev/null || true)
-    if [ -n "$PID" ]; then
-        PROC=$(ps -p "$PID" -o comm= 2>/dev/null || echo "desconhecido")
-        warn "Porta $PORT ainda em uso pelo processo '$PROC' (PID $PID). Encerrando..."
-        kill -9 "$PID" 2>/dev/null || true
-        sleep 1
-        log "Processo na porta $PORT encerrado."
+for SVC in apache2 nginx lighttpd httpd; do
+    if systemctl is-active --quiet "$SVC" 2>/dev/null; then
+        warn "Serviço '$SVC' detectado em execução. Parando e desabilitando..."
+        systemctl stop "$SVC" 2>/dev/null || true
+        systemctl disable "$SVC" 2>/dev/null || true
+        log "Serviço '$SVC' parado."
     fi
 done
 
-log "Portas 80 e 443 liberadas com sucesso."
+# Forçar liberação das portas 80 e 443 se ainda ocupadas
+for PORT in 80 443; do
+    PIDS=$(lsof -ti :"$PORT" 2>/dev/null || true)
+    if [ -n "$PIDS" ]; then
+        for PID in $PIDS; do
+            PROC=$(ps -p "$PID" -o comm= 2>/dev/null || echo "desconhecido")
+            warn "Porta $PORT em uso por '$PROC' (PID $PID). Encerrando..."
+            kill -9 "$PID" 2>/dev/null || true
+        done
+        sleep 1
+    fi
+done
+log "Portas 80 e 443 liberadas."
 
 # ─── 4. Instalar Docker ──────────────────────────────────────────────────────
 log "4/10 Instalando Docker..."
 if ! command -v docker &>/dev/null; then
-    curl -fsSL https://get.docker.com | sh
+    # Método oficial para Ubuntu e Debian
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL "https://download.docker.com/linux/${OS_ID}/gpg" \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/${OS_ID} $(lsb_release -cs) stable" \
+        | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
     systemctl enable docker
     systemctl start docker
+    log "Docker instalado: $(docker --version)"
 else
     log "Docker já instalado: $(docker --version)"
 fi
 
-# ─── 5. Instalar Docker Compose ─────────────────────────────────────────────
-log "5/10 Instalando Docker Compose..."
-if ! command -v docker-compose &>/dev/null; then
-    COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-    curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+# ─── 5. Configurar Docker Compose ───────────────────────────────────────────
+log "5/10 Configurando Docker Compose..."
+# Verificar se docker compose (plugin) funciona
+if docker compose version &>/dev/null 2>&1; then
+    log "Docker Compose plugin disponível: $(docker compose version)"
+    # Criar alias para compatibilidade com docker-compose
+    if ! command -v docker-compose &>/dev/null; then
+        ln -sf /usr/bin/docker /usr/local/bin/docker-compose 2>/dev/null || true
+        cat > /usr/local/bin/docker-compose << 'DCEOF'
+#!/bin/bash
+exec docker compose "$@"
+DCEOF
+        chmod +x /usr/local/bin/docker-compose
+    fi
+elif ! command -v docker-compose &>/dev/null; then
+    # Instalar docker-compose standalone como fallback
+    COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4 || echo "v2.24.5")
+    curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" \
+        -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
-else
-    log "Docker Compose já instalado: $(docker-compose --version)"
+    log "Docker Compose instalado: $(docker-compose --version)"
 fi
 
 # ─── 6. Configurar Firewall ──────────────────────────────────────────────────
@@ -106,11 +133,16 @@ log "Firewall configurado: SSH, 80/tcp e 443/tcp liberados."
 
 # ─── 7. Clonar repositório ───────────────────────────────────────────────────
 log "7/10 Clonando repositório..."
-if [ -d "$APP_DIR" ]; then
-    warn "Diretório $APP_DIR já existe. Fazendo backup..."
+if [ -d "$APP_DIR/.git" ]; then
+    warn "Repositório já existe em $APP_DIR. Atualizando..."
+    cd "$APP_DIR" && git pull origin main || true
+elif [ -d "$APP_DIR" ]; then
+    warn "Diretório $APP_DIR já existe (sem git). Fazendo backup..."
     mv "$APP_DIR" "${APP_DIR}.bak.$(date +%Y%m%d_%H%M%S)"
+    git clone "$REPO_URL" "$APP_DIR"
+else
+    git clone "$REPO_URL" "$APP_DIR"
 fi
-git clone "$REPO_URL" "$APP_DIR"
 cd "$APP_DIR"
 
 # ─── 8. Configurar variáveis de ambiente ────────────────────────────────────
@@ -118,7 +150,6 @@ log "8/10 Configurando variáveis de ambiente..."
 if [ ! -f "$APP_DIR/.env" ]; then
     cp "$APP_DIR/.env.example" "$APP_DIR/.env"
 
-    # Gerar chaves seguras
     SECRET_KEY=$(openssl rand -hex 32)
     ENCRYPTION_KEY=$(openssl rand -hex 32)
     DB_PASSWORD=$(openssl rand -base64 24 | tr -d '=/+' | head -c 24)
@@ -136,47 +167,72 @@ if [ ! -f "$APP_DIR/.env" ]; then
     echo -e "${BLUE}  DB_PASSWORD:    $DB_PASSWORD${NC}"
     echo -e "${BLUE}  REDIS_PASSWORD: $REDIS_PASSWORD${NC}"
     echo -e "${BLUE}  BACKUP_API_KEY: $BACKUP_API_KEY${NC}"
+else
+    log "Arquivo .env já existe. Mantendo configuração atual."
 fi
 
 # ─── 9. Certificado SSL ──────────────────────────────────────────────────────
 log "9/10 Obtendo certificado SSL (Let's Encrypt)..."
 if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
-    # Porta 80 já está livre (liberamos acima), usar modo standalone
+    # Garantir que porta 80 está livre para o certbot standalone
+    for PID in $(lsof -ti :80 2>/dev/null || true); do
+        kill -9 "$PID" 2>/dev/null || true
+    done
+    sleep 1
+
     certbot certonly --standalone \
         --non-interactive \
         --agree-tos \
         --email "$EMAIL" \
         -d "$DOMAIN" \
         --preferred-challenges http \
-        || warn "Falha ao obter certificado SSL. Verifique se o DNS do domínio aponta para este servidor. O sistema funcionará sem HTTPS por enquanto."
+        && log "Certificado SSL obtido com sucesso!" \
+        || warn "Falha ao obter certificado SSL. Verifique se o DNS '$DOMAIN' aponta para este servidor. O sistema funcionará em HTTP por enquanto."
+else
+    log "Certificado SSL já existe para $DOMAIN."
 fi
 
 # Renovação automática
-echo "0 12 * * * root certbot renew --quiet --post-hook 'docker-compose -f $APP_DIR/docker-compose.yml restart nginx'" > /etc/cron.d/certbot-renew
+echo "0 12 * * * root certbot renew --quiet --deploy-hook 'cd $APP_DIR && docker compose restart nginx 2>/dev/null || docker-compose restart nginx 2>/dev/null'" \
+    > /etc/cron.d/certbot-renew
 log "Renovação automática de SSL configurada."
 
 # ─── 10. Iniciar serviços ────────────────────────────────────────────────────
 log "10/10 Iniciando serviços com Docker Compose..."
 cd "$APP_DIR"
-docker-compose pull 2>/dev/null || true
-docker-compose up -d --build
 
-# Aguardar inicialização completa
-log "Aguardando todos os serviços ficarem prontos (30s)..."
-sleep 30
+# Usar docker compose (plugin) ou docker-compose (standalone)
+DC_CMD="docker compose"
+if ! docker compose version &>/dev/null 2>&1; then
+    DC_CMD="docker-compose"
+fi
 
-# Verificar status final
-if docker-compose ps | grep -q "Up"; then
+# Remover containers antigos se existirem
+$DC_CMD down --remove-orphans 2>/dev/null || true
+
+# Build e iniciar
+$DC_CMD up -d --build
+
+# Aguardar inicialização
+log "Aguardando todos os serviços ficarem prontos (45s)..."
+sleep 45
+
+# Verificar status
+if $DC_CMD ps | grep -qE "Up|running"; then
     log "═══════════════════════════════════════════════════"
     log "   Instalação concluída com sucesso!"
-    log "   Acesse: https://$DOMAIN"
+    if [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
+        log "   Acesse: https://$DOMAIN"
+    else
+        log "   Acesse: http://$DOMAIN (SSL pendente)"
+    fi
     log "   Usuário padrão: admin"
     log "   Senha padrão:   Admin@BR10!"
     log "   MUDE A SENHA E ATIVE O 2FA NO PRIMEIRO ACESSO!"
     log "═══════════════════════════════════════════════════"
-    log "Para verificar os logs: docker-compose -f $APP_DIR/docker-compose.yml logs -f"
+    log "Logs: $DC_CMD -f $APP_DIR/docker-compose.yml logs -f"
 else
-    warn "Alguns serviços podem não ter iniciado corretamente."
-    warn "Verifique com: docker-compose -f $APP_DIR/docker-compose.yml ps"
-    warn "Logs:          docker-compose -f $APP_DIR/docker-compose.yml logs"
+    warn "Alguns serviços podem não ter iniciado. Verifique:"
+    $DC_CMD ps
+    warn "Logs: cd $APP_DIR && $DC_CMD logs"
 fi

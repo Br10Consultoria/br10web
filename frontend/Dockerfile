@@ -2,16 +2,15 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Instalar pnpm
-RUN npm install -g pnpm
-
 # Copiar arquivos de dependências
-COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+COPY package.json ./
+
+# Instalar dependências com npm (não requer lockfile)
+RUN npm install --legacy-peer-deps
 
 # Copiar código e fazer build
 COPY . .
-RUN pnpm run build
+RUN npm run build
 
 # ─── Produção ────────────────────────────────────────────────────────────────
 FROM nginx:alpine

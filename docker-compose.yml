@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   # ─── PostgreSQL Database ────────────────────────────────────────────────────
   db:
@@ -20,7 +18,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-br10user} -d ${DB_NAME:-br10netmanager}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks:
       - br10_network
 
@@ -39,6 +38,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
     networks:
       - br10_network
 
@@ -51,10 +51,11 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql+asyncpg://${DB_USER:-br10user}:${DB_PASSWORD}@db:5432/${DB_NAME:-br10netmanager}
+      - DATABASE_URL_SYNC=postgresql://${DB_USER:-br10user}:${DB_PASSWORD}@db:5432/${DB_NAME:-br10netmanager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret_password}@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://br10web.br10consultoria.com.br}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://br10web.br10consultoria.com.br,http://br10web.br10consultoria.com.br}
       - BACKUP_DIR=/app/backups
       - UPLOAD_DIR=/app/uploads
       - ENVIRONMENT=production
@@ -74,8 +75,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 90s
     networks:
       - br10_network
 
@@ -122,7 +123,6 @@ services:
       - BACKUP_API_KEY=${BACKUP_API_KEY:-}
     volumes:
       - backend_backups:/backups
-      - ./scripts/backup-cron.sh:/backup-cron.sh:ro
     command: >
       sh -c "apk add --no-cache curl &&
              echo '0 2 * * * curl -s -X POST http://backend:8000/api/v1/backup/create -H \"X-API-Key: ${BACKUP_API_KEY}\" >> /var/log/backup.log 2>&1' | crontab - &&
