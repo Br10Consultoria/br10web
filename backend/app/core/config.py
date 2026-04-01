@@ -3,9 +3,10 @@ BR10 NetManager - Core Configuration
 Configuração central da aplicação com validação e segurança.
 """
 import secrets
-from typing import List, Optional
+import json
+from typing import List, Optional, Union, Any
 from pydantic_settings import BaseSettings
-from pydantic import AnyHttpUrl, validator
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -42,13 +43,37 @@ class Settings(BaseSettings):
     # Backup
     BACKUP_DIR: str = "/app/backups"
     BACKUP_RETENTION_DAYS: int = 30
+    BACKUP_API_KEY: str = ""
 
-    # CORS
-    ALLOWED_ORIGINS: List[str] = [
+    # CORS - aceita string separada por vírgulas OU lista JSON
+    ALLOWED_ORIGINS: Union[List[str], str] = [
         "https://br10web.br10consultoria.com.br",
+        "http://br10web.br10consultoria.com.br",
         "http://localhost:3000",
         "http://localhost:5173",
     ]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, v: Any) -> List[str]:
+        """Aceita string com vírgulas, JSON array, ou lista Python."""
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            # Tentar parsear como JSON array: ["url1","url2"]
+            if v.startswith("["):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    pass
+            # Separado por vírgulas: url1,url2
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return [
+            "https://br10web.br10consultoria.com.br",
+            "http://br10web.br10consultoria.com.br",
+            "http://localhost:3000",
+        ]
 
     # Encryption key for device passwords (Fernet)
     ENCRYPTION_KEY: Optional[str] = None
@@ -57,9 +82,15 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     RATE_LIMIT_LOGIN_PER_MINUTE: int = 5
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    # Environment
+    ENVIRONMENT: str = "production"
+    LOG_LEVEL: str = "INFO"
+
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+        "extra": "ignore",
+    }
 
 
 settings = Settings()
