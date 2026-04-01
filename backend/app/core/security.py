@@ -1,6 +1,7 @@
 """
 BR10 NetManager - Security Module
 Implementa hashing de senhas, JWT, criptografia e 2FA.
+Usa bcrypt diretamente (sem passlib) para evitar incompatibilidades de versão.
 """
 import base64
 import os
@@ -8,31 +9,38 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 
+import bcrypt
 import pyotp
 import qrcode
 import io
 from cryptography.fernet import Fernet
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
-# ─── Password Hashing ────────────────────────────────────────────────────────
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=settings.BCRYPT_ROUNDS,
-)
-
+# ─── Password Hashing (bcrypt direto, sem passlib) ───────────────────────────
 
 def hash_password(password: str) -> str:
     """Gera hash seguro da senha usando bcrypt."""
-    return pwd_context.hash(password)
+    # bcrypt tem limite de 72 bytes; fazemos pré-hash com SHA-256 para suportar senhas longas
+    import hashlib
+    password_bytes = password.encode("utf-8")
+    # Pré-hash para suportar senhas maiores que 72 bytes com segurança
+    prehashed = base64.b64encode(hashlib.sha256(password_bytes).digest())
+    salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
+    hashed = bcrypt.hashpw(prehashed, salt)
+    return hashed.decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verifica senha contra hash bcrypt."""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        import hashlib
+        password_bytes = plain_password.encode("utf-8")
+        prehashed = base64.b64encode(hashlib.sha256(password_bytes).digest())
+        return bcrypt.checkpw(prehashed, hashed_password.encode("utf-8"))
+    except Exception:
+        return False
 
 
 # ─── JWT Tokens ──────────────────────────────────────────────────────────────
@@ -126,7 +134,6 @@ def get_fernet() -> Fernet:
     if settings.ENCRYPTION_KEY:
         key = settings.ENCRYPTION_KEY.encode()
     else:
-        # Gera chave derivada do SECRET_KEY para desenvolvimento
         import hashlib
         key_bytes = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
         key = base64.urlsafe_b64encode(key_bytes)
