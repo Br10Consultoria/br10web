@@ -72,7 +72,7 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     description = Column(Text, nullable=True)
     old_values = Column(JSON, nullable=True)
     new_values = Column(JSON, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    extra_data = Column(JSON, nullable=True)  # Renomeado de 'metadata' (reservado pelo SQLAlchemy)
 
     # Contexto de Rede
     ip_address = Column(String(45), nullable=True)
