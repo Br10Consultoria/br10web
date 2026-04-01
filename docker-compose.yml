@@ -9,6 +9,8 @@ services:
       POSTGRES_USER: ${DB_USER:-br10user}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: America/Bahia
+      PGTZ: America/Bahia
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -28,6 +30,8 @@ services:
     image: redis:7-alpine
     container_name: br10_redis
     restart: unless-stopped
+    environment:
+      TZ: America/Bahia
     command: redis-server --requirepass ${REDIS_PASSWORD:-redis_secret_password} --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
@@ -60,6 +64,7 @@ services:
       - UPLOAD_DIR=/app/uploads
       - ENVIRONMENT=production
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=America/Bahia
     volumes:
       - backend_backups:/app/backups
       - backend_uploads:/app/uploads
@@ -87,6 +92,8 @@ services:
       dockerfile: Dockerfile
     container_name: br10_frontend
     restart: unless-stopped
+    environment:
+      TZ: America/Bahia
     expose:
       - "80"
     depends_on:
@@ -99,6 +106,8 @@ services:
     image: nginx:alpine
     container_name: br10_nginx
     restart: unless-stopped
+    environment:
+      TZ: America/Bahia
     ports:
       - "80:80"
       - "443:443"
@@ -121,10 +130,13 @@ services:
     environment:
       - BACKUP_API_URL=http://backend:8000/api/v1/backup/create
       - BACKUP_API_KEY=${BACKUP_API_KEY:-}
+      - TZ=America/Bahia
     volumes:
       - backend_backups:/backups
     command: >
-      sh -c "apk add --no-cache curl &&
+      sh -c "apk add --no-cache curl tzdata &&
+             cp /usr/share/zoneinfo/America/Bahia /etc/localtime &&
+             echo 'America/Bahia' > /etc/timezone &&
              echo '0 2 * * * curl -s -X POST http://backend:8000/api/v1/backup/create -H \"X-API-Key: ${BACKUP_API_KEY}\" >> /var/log/backup.log 2>&1' | crontab - &&
              crond -f -l 2"
     depends_on:

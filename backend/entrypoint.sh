@@ -5,14 +5,12 @@ set -e
 echo "[entrypoint] Iniciando BR10 NetManager Backend..."
 
 # ─── Extrair credenciais do banco da DATABASE_URL ────────────────────────────
-# Formato: postgresql+asyncpg://user:pass@host:port/dbname
 DB_URL="${DATABASE_URL:-}"
 DB_HOST=$(echo "$DB_URL" | sed -E 's|.*@([^:/]+).*|\1|')
 DB_PORT=$(echo "$DB_URL" | sed -E 's|.*:([0-9]+)/.*|\1|')
 DB_USER=$(echo "$DB_URL" | sed -E 's|.*://([^:]+):.*|\1|')
 DB_NAME=$(echo "$DB_URL" | sed -E 's|.*/([^?]+).*|\1|')
 
-# Fallback para valores padrão
 DB_HOST="${DB_HOST:-db}"
 DB_PORT="${DB_PORT:-5432}"
 DB_USER="${DB_USER:-br10user}"
@@ -37,35 +35,60 @@ done
 
 echo "[entrypoint] Banco de dados disponivel!"
 
-# ─── Executar migrations do Alembic ─────────────────────────────────────────
-echo "[entrypoint] Executando migrations..."
-cd /app
-
-if alembic upgrade head 2>&1; then
-    echo "[entrypoint] Migrations aplicadas com sucesso."
-else
-    echo "[entrypoint] Alembic falhou. Usando create_all como fallback..."
-    python3 -c "
+# ─── Criar tabelas com create_all (idempotente) ──────────────────────────────
+echo "[entrypoint] Criando/verificando tabelas do banco de dados..."
+python3 << 'PYEOF'
 import asyncio
-from app.core.database import async_engine
-from app.models.base import Base
-import app.models.user
-import app.models.device
-import app.models.vpn
-import app.models.audit
+import sys
 
-async def create_tables():
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    print('[entrypoint] Tabelas criadas via create_all.')
+async def init_database():
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy import text
+        import os
 
-asyncio.run(create_tables())
-" && echo "[entrypoint] Fallback create_all concluido." || echo "[entrypoint] Aviso: create_all tambem falhou, tentando continuar..."
-fi
+        db_url = os.environ.get("DATABASE_URL", "")
+
+        # Importar todos os modelos para registrar no metadata
+        from app.models.base import Base
+        import app.models.user
+        import app.models.device
+        import app.models.vpn
+        import app.models.audit
+
+        engine = create_async_engine(db_url, echo=False)
+
+        async with engine.begin() as conn:
+            # Criar ENUMs manualmente com IF NOT EXISTS para evitar duplicatas
+            enums_sql = [
+                "DO $$ BEGIN CREATE TYPE userrole AS ENUM ('ADMIN', 'TECHNICIAN', 'VIEWER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE vpntype AS ENUM ('L2TP', 'PPTP', 'OPENVPN', 'IPSEC', 'WIREGUARD', 'GRE', 'OTHER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE vpnstatus AS ENUM ('ACTIVE', 'INACTIVE', 'CONNECTING', 'ERROR', 'DISABLED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE auditaction AS ENUM ('LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'DEVICE_CREATE', 'DEVICE_UPDATE', 'DEVICE_DELETE', 'DEVICE_VIEW', 'CREDENTIAL_CREATE', 'CREDENTIAL_UPDATE', 'CREDENTIAL_DELETE', 'VPN_CREATE', 'VPN_UPDATE', 'VPN_DELETE', 'ROUTE_CREATE', 'ROUTE_UPDATE', 'ROUTE_DELETE', 'BACKUP_CREATE', 'BACKUP_RESTORE', 'USER_CREATE', 'USER_UPDATE', 'USER_DELETE', 'TERMINAL_CONNECT', 'TERMINAL_DISCONNECT', 'SETTINGS_UPDATE', '2FA_ENABLE', '2FA_DISABLE'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+            ]
+            for sql in enums_sql:
+                await conn.execute(text(sql))
+
+            # Criar tabelas (checkfirst=True nao recria se ja existem)
+            await conn.run_sync(Base.metadata.create_all, checkfirst=True)
+
+        await engine.dispose()
+        print("[entrypoint] Tabelas criadas/verificadas com sucesso.")
+        return True
+
+    except Exception as e:
+        print(f"[entrypoint] ERRO ao criar tabelas: {e}", file=sys.stderr)
+        return False
+
+result = asyncio.run(init_database())
+sys.exit(0 if result else 1)
+PYEOF
+
+echo "[entrypoint] Banco de dados inicializado!"
 
 # ─── Criar usuário admin padrão (se não existir) ─────────────────────────────
 echo "[entrypoint] Verificando usuario admin..."
-python3 -c "
+python3 << 'PYEOF'
 import asyncio
 import sys
 
@@ -99,9 +122,8 @@ async def create_admin():
         print(f'[entrypoint] Aviso ao criar admin: {e}', file=sys.stderr)
 
 asyncio.run(create_admin())
-" 2>&1 || echo "[entrypoint] Aviso: nao foi possivel verificar/criar admin agora."
+PYEOF
 
-# ─── Iniciar o servidor FastAPI ──────────────────────────────────────────────
 echo "[entrypoint] Iniciando servidor FastAPI na porta 8000..."
 exec uvicorn app.main:app \
     --host 0.0.0.0 \

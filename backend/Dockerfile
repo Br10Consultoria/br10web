@@ -5,6 +5,7 @@ LABEL description="BR10 Network Manager - Backend API"
 
 # Variáveis de ambiente
 ENV PYTHONDONTWRITEBYTECODE=1 \
+    TZ=America/Bahia \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -14,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     postgresql-client \
     openssh-client \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/America/Bahia /etc/localtime \
+    && echo 'America/Bahia' > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # Criar usuário não-root
