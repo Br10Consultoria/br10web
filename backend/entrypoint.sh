@@ -47,7 +47,7 @@ else
     echo "[entrypoint] Alembic falhou. Usando create_all como fallback..."
     python3 -c "
 import asyncio
-from app.core.database import engine
+from app.core.database import async_engine
 from app.models.base import Base
 import app.models.user
 import app.models.device
@@ -55,7 +55,7 @@ import app.models.vpn
 import app.models.audit
 
 async def create_tables():
-    async with engine.begin() as conn:
+    async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     print('[entrypoint] Tabelas criadas via create_all.')
 
