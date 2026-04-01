@@ -1,0 +1,99 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+*.log
+
+# ── Virtual Environments ──────────────────────────────────────────────────────
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ── Secrets & Credentials ─────────────────────────────────────────────────────
+backend/.env
+.secrets
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+ssl/
+
+# ── Node.js ───────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ── Build outputs ─────────────────────────────────────────────────────────────
+frontend/dist/
+frontend/build/
+*.tsbuildinfo
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+.docker/
+
+# ── Database ──────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+backups/
+*.sql.gz
+
+# ── Uploads ───────────────────────────────────────────────────────────────────
+uploads/
+media/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Alembic ───────────────────────────────────────────────────────────────────
+backend/migrations/versions/*.py
+!backend/migrations/versions/.gitkeep
