@@ -59,7 +59,7 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret_password}@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://br10web.br10consultoria.com.br,http://br10web.br10consultoria.com.br}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://br10web.br10consultoria.com.br,http://br10web.br10consultoria.com.br,http://localhost,http://localhost:80,http://localhost:3000,http://localhost:5173}
       - BACKUP_DIR=/app/backups
       - UPLOAD_DIR=/app/uploads
       - ENVIRONMENT=production

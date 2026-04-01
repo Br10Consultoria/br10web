@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Shield, Eye, EyeOff, Loader2, Network, Lock, User } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { authApi } from '../utils/api'
+import api, { authApi } from '../utils/api'
 import { useAuthStore } from '../store/authStore'
 
 const loginSchema = z.object({
@@ -40,8 +40,10 @@ export default function LoginPage() {
         return
       }
 
-      // Buscar dados do usuário
-      const meResponse = await authApi.me()
+      // Buscar dados do usuário — passar token diretamente pois ainda não está no store
+      const meResponse = await api.get('/auth/me', {
+        headers: { Authorization: `Bearer ${result.access_token}` },
+      })
       setAuth(meResponse.data, result.access_token, result.refresh_token)
       toast.success(`Bem-vindo, ${meResponse.data.full_name}!`)
       navigate('/dashboard')
