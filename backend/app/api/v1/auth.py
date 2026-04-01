@@ -75,6 +75,17 @@ async def require_technician(current_user: User = Depends(get_current_user)) -> 
     return current_user
 
 
+# Alias para compatibilidade com imports existentes
+async def require_technician_or_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Alias de require_technician: exige role de técnico ou admin."""
+    return await require_technician(current_user)
+
+
+def require_role(current_user: User = Depends(get_current_user)) -> User:
+    """Dependency genérica: qualquer usuário autenticado e ativo."""
+    return current_user
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(
     request: Request,

@@ -1,18 +1,17 @@
 """
-API de Log de Auditoria
+BR10 NetManager - API de Log de Auditoria
 """
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
-from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.models.audit import AuditLog
+from app.models.audit import AuditLog, AuditAction
 from app.models.user import User
-from app.api.v1.auth import get_current_user, require_role
+from app.api.v1.auth import require_admin
 
-router = APIRouter(prefix="/audit", tags=["audit"])
+router = APIRouter(prefix="/audit", tags=["Audit"])
 
 
 @router.get("")
@@ -23,19 +22,18 @@ async def list_audit_logs(
     action: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(["admin", "technician"])),
+    current_user: User = Depends(require_admin),
 ):
-    """Listar logs de auditoria com paginação e filtros."""
+    """Listar logs de auditoria com paginação e filtros. Requer role admin."""
     query = select(AuditLog).order_by(AuditLog.created_at.desc())
     count_query = select(func.count(AuditLog.id))
 
     if search:
         search_filter = or_(
-            AuditLog.username.ilike(f"%{search}%"),
-            AuditLog.action.ilike(f"%{search}%"),
-            AuditLog.ip_address.ilike(f"%{search}%"),
             AuditLog.description.ilike(f"%{search}%"),
-            AuditLog.device_name.ilike(f"%{search}%"),
+            AuditLog.ip_address.ilike(f"%{search}%"),
+            AuditLog.resource_type.ilike(f"%{search}%"),
+            AuditLog.resource_id.ilike(f"%{search}%"),
         )
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
@@ -61,15 +59,15 @@ async def list_audit_logs(
             {
                 "id": str(log.id),
                 "user_id": str(log.user_id) if log.user_id else None,
-                "username": log.username,
-                "action": log.action,
+                "device_id": str(log.device_id) if log.device_id else None,
+                "action": log.action.value if hasattr(log.action, "value") else str(log.action),
                 "resource_type": log.resource_type,
                 "resource_id": log.resource_id,
-                "device_id": str(log.device_id) if log.device_id else None,
-                "device_name": log.device_name,
-                "ip_address": log.ip_address,
-                "status": log.status,
                 "description": log.description,
+                "ip_address": log.ip_address,
+                "user_agent": log.user_agent,
+                "status": log.status,
+                "error_message": log.error_message,
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
             for log in logs
@@ -77,5 +75,13 @@ async def list_audit_logs(
         "total": total,
         "page": page,
         "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page,
+        "pages": (total + per_page - 1) // per_page if total else 0,
     }
+
+
+@router.get("/actions")
+async def list_audit_actions(
+    current_user: User = Depends(require_admin),
+):
+    """Listar todas as ações de auditoria disponíveis."""
+    return {"actions": [a.value for a in AuditAction]}
