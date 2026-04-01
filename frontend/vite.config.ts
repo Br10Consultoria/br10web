@@ -30,9 +30,13 @@ export default defineConfig({
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
           ui: ['lucide-react', 'recharts'],
-          terminal: ['xterm', 'xterm-addon-fit'],
+          motion: ['framer-motion'],
+          terminal: ['@xterm/xterm', '@xterm/addon-fit'],
         },
       },
     },
+  },
+  optimizeDeps: {
+    include: ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links', 'framer-motion'],
   },
 })
