@@ -785,3 +785,54 @@ async def check_devices_status(
             for device in devices
         ]
     }
+
+
+class PingRequest(BaseModel):
+    target_ip: str
+    port: Optional[int] = None
+    timeout: Optional[int] = 3
+
+
+@router.post("/{device_id}/ping")
+async def ping_target(
+    device_id: str,
+    body: PingRequest,
+    current_user: User = Depends(require_technician_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Testa conectividade com um IP a partir do servidor (TCP connect nas portas comuns).
+    Usado para validar rotas estáticas e next hops antes de salvar."""
+    import asyncio as _asyncio
+    import time
+
+    target = body.target_ip
+    # Portas para testar (em ordem de prioridade)
+    ports_to_try = [body.port] if body.port else [22, 23, 80, 443, 8291, 8080, 8443]
+    timeout = body.timeout or 3
+
+    for port in ports_to_try:
+        try:
+            start = time.monotonic()
+            conn = _asyncio.open_connection(target, port)
+            reader, writer = await _asyncio.wait_for(conn, timeout=timeout)
+            latency_ms = round((time.monotonic() - start) * 1000, 1)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return {
+                "target_ip": target,
+                "reachable": True,
+                "method": f"TCP:{port}",
+                "latency_ms": latency_ms,
+            }
+        except Exception:
+            continue
+
+    return {
+        "target_ip": target,
+        "reachable": False,
+        "method": "TCP",
+        "error": f"Nenhuma porta respondeu ({', '.join(str(p) for p in ports_to_try)})",
+    }

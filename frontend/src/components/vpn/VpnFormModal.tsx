@@ -73,10 +73,13 @@ export default function VpnFormModal({ deviceId, vpn, onClose, onSuccess }: Prop
             <Shield className="w-5 h-5 text-purple-400" />
             <h2 className="font-semibold text-white">{isEdit ? 'Editar VPN' : 'Nova VPN L2TP'}</h2>
           </div>
-          <button onClick={onClose} className="btn-ghost p-1.5 rounded-lg"><X className="w-4 h-4" /></button>
+          <button type="button" onClick={onClose} className="btn-ghost p-1.5 rounded-lg"><X className="w-4 h-4" /></button>
         </div>
 
-        <form onSubmit={handleSubmit(d => mutation.mutate(d))} className="p-6 space-y-5">
+        <form
+          onSubmit={e => { e.preventDefault(); e.stopPropagation(); handleSubmit(d => mutation.mutate(d))(e) }}
+          className="p-6 space-y-5"
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="sm:col-span-2">
               <label className="label">Nome da Conexão *</label>

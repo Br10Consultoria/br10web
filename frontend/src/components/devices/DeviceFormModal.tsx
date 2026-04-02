@@ -90,7 +90,7 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
     setEnabledProtocols(prev => ({ ...prev, [proto]: !prev[proto] }))
   }
 
-  const { register, handleSubmit, setValue, formState: { errors } } = useForm({
+  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm({
     defaultValues: device ? {
       name: device.name,
       hostname: device.hostname || '',
@@ -118,16 +118,17 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
     },
   })
 
-  // Sincronizar primary_protocol quando protocolos mudam
+  const currentPrimaryProtocol = watch('primary_protocol')
+
+  // Quando o protocolo principal selecionado é desabilitado, trocar para o primeiro habilitado
   useEffect(() => {
-    const enabledList = PROTOCOLS.filter(p => enabledProtocols[p.value])
-    if (enabledList.length > 0) {
-      const currentProtocol = device?.primary_protocol || 'ssh'
-      if (!enabledProtocols[currentProtocol]) {
-        setValue('primary_protocol', enabledList[0].value)
+    if (currentPrimaryProtocol && !enabledProtocols[currentPrimaryProtocol]) {
+      const firstEnabled = PROTOCOLS.find(p => enabledProtocols[p.value])
+      if (firstEnabled) {
+        setValue('primary_protocol', firstEnabled.value)
       }
     }
-  }, [enabledProtocols])
+  }, [enabledProtocols, currentPrimaryProtocol])
 
   const mutation = useMutation({
     mutationFn: (data: any) => {
