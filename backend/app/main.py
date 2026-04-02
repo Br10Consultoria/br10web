@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db
+from app.core.scheduler import start_scheduler, stop_scheduler
 from app.api.v1.auth import router as auth_router
 from app.api.v1.devices import router as devices_router
 from app.api.v1.vpn import router as vpn_router, routes_router
@@ -45,8 +46,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Banco de dados não disponível: {e}")
 
+    # Iniciar scheduler de background tasks
+    try:
+        start_scheduler()
+        logger.info("Scheduler iniciado — verificação de status a cada 5 minutos")
+    except Exception as e:
+        logger.warning(f"Scheduler não pôde ser iniciado: {e}")
+
     yield
 
+    # Encerrar scheduler graciosamente
+    stop_scheduler()
     logger.info("Encerrando BR10 NetManager...")
 
 

@@ -22,3 +22,4 @@ redis==5.2.1
 celery==5.4.0
 Pillow==11.1.0
 httpx==0.28.1
+apscheduler==3.10.4
