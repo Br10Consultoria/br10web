@@ -125,10 +125,11 @@ asyncio.run(create_admin())
 PYEOF
 
 echo "[entrypoint] Iniciando servidor FastAPI na porta 8000..."
+# Usar 1 worker para evitar scheduler duplicado (FastAPI async é eficiente com 1 worker)
 exec uvicorn app.main:app \
     --host 0.0.0.0 \
     --port 8000 \
-    --workers 2 \
+    --workers 1 \
     --proxy-headers \
     --forwarded-allow-ips='*' \
     --log-level info

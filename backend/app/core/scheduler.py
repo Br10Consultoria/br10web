@@ -147,6 +147,11 @@ async def run_device_status_check():
 
 def start_scheduler():
     """Inicia o scheduler com todos os jobs agendados."""
+    # Evitar iniciar múltiplas instâncias (problema com uvicorn --workers > 1)
+    if scheduler.running:
+        logger.warning("[Scheduler] Já está rodando, ignorando segundo start.")
+        return
+
     # Verificação de status a cada 5 minutos
     scheduler.add_job(
         run_device_status_check,
