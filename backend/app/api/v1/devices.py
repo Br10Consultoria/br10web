@@ -643,34 +643,49 @@ async def check_single_device_status(
     if not device:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispositivo não encontrado")
 
+    import asyncio as _asyncio
+
     ip = device.management_ip
     ports_to_try = []
-    if device.ssh_port:
+    if device.ssh_port and device.ssh_port > 0:
         ports_to_try.append(device.ssh_port)
-    if device.telnet_port:
+    if device.telnet_port and device.telnet_port > 0:
         ports_to_try.append(device.telnet_port)
+    if device.winbox_port:
+        ports_to_try.append(device.winbox_port)
     if device.http_port:
         ports_to_try.append(device.http_port)
     if device.https_port:
         ports_to_try.append(device.https_port)
     if not ports_to_try:
-        ports_to_try = [22, 23, 80, 443]
+        ports_to_try = [22, 23, 80, 443, 8291]
+    ports_to_try = list(set(ports_to_try))
 
-    new_status = DeviceStatus.OFFLINE
-    for port in ports_to_try:
+    async def _single_tcp(port: int) -> bool:
         try:
-            import asyncio as _asyncio
-            conn = _asyncio.open_connection(ip, port)
-            reader, writer = await _asyncio.wait_for(conn, timeout=3)
+            reader, writer = await _asyncio.wait_for(
+                _asyncio.open_connection(ip, port), timeout=2.0
+            )
             writer.close()
             try:
-                await writer.wait_closed()
+                await _asyncio.wait_for(writer.wait_closed(), timeout=1.0)
             except Exception:
                 pass
-            new_status = DeviceStatus.ONLINE
-            break
+            return True
         except Exception:
-            continue
+            return False
+
+    new_status = DeviceStatus.OFFLINE
+    try:
+        port_tasks = [_single_tcp(p) for p in ports_to_try]
+        port_results = await _asyncio.wait_for(
+            _asyncio.gather(*port_tasks, return_exceptions=True),
+            timeout=8.0
+        )
+        if any(r is True for r in port_results):
+            new_status = DeviceStatus.ONLINE
+    except Exception:
+        pass
 
     old_status = device.status
     device.status = new_status
@@ -706,64 +721,65 @@ async def check_devices_status(
     result = await db.execute(query)
     devices = result.scalars().all()
     
+    async def _tcp_try(ip: str, port: int) -> bool:
+        """Tenta conexão TCP com timeout curto."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, port), timeout=2.0
+            )
+            writer.close()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     async def check_device(device: Device) -> DeviceStatus:
-        """Tenta conexão TCP nas portas de gerência do dispositivo."""
+        """Testa todas as portas do dispositivo em PARALELO. Sem ICMP."""
         ip = device.management_ip
-        # Portas para tentar (em ordem de prioridade)
         ports_to_try = []
-        if device.ssh_port:
+        if device.ssh_port and device.ssh_port > 0:
             ports_to_try.append(device.ssh_port)
-        if device.telnet_port:
+        if device.telnet_port and device.telnet_port > 0:
             ports_to_try.append(device.telnet_port)
+        if device.winbox_port:
+            ports_to_try.append(device.winbox_port)
         if device.http_port:
             ports_to_try.append(device.http_port)
         if device.https_port:
             ports_to_try.append(device.https_port)
-        # Portas padrão se nenhuma configurada
         if not ports_to_try:
             ports_to_try = [22, 23, 80, 443, 8291]
-        
-        for port in ports_to_try:
-            try:
-                conn = asyncio.open_connection(ip, port)
-                reader, writer = await asyncio.wait_for(conn, timeout=3)
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-                return DeviceStatus.ONLINE
-            except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
-                continue
-            except Exception:
-                continue
-        
-        # Também tenta ICMP ping como fallback
+        ports_to_try = list(set(ports_to_try))
         try:
-            process = await asyncio.create_subprocess_exec(
-                'ping', '-c', '1', '-W', '2', ip,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL
+            port_tasks = [_tcp_try(ip, p) for p in ports_to_try]
+            port_results = await asyncio.wait_for(
+                asyncio.gather(*port_tasks, return_exceptions=True),
+                timeout=8.0
             )
-            await asyncio.wait_for(process.communicate(), timeout=4)
-            if process.returncode == 0:
+            if any(r is True for r in port_results):
                 return DeviceStatus.ONLINE
         except Exception:
             pass
-        
         return DeviceStatus.OFFLINE
-    
+
     # Verifica todos os dispositivos em paralelo
     tasks = [check_device(device) for device in devices]
-    statuses = await asyncio.gather(*tasks)
-    
+    statuses = await asyncio.gather(*tasks, return_exceptions=True)
+
     # Atualiza o status no banco e registra mudanças
     updated_count = 0
     changes = []
     for device, new_status in zip(devices, statuses):
+        if isinstance(new_status, Exception):
+            new_status = DeviceStatus.OFFLINE
         if device.status != new_status:
             old_status = device.status
             device.status = new_status
+            if new_status == DeviceStatus.ONLINE:
+                device.last_seen = datetime.now(timezone.utc)
             updated_count += 1
             changes.append({
                 "id": str(device.id),
@@ -772,6 +788,8 @@ async def check_devices_status(
                 "old_status": old_status.value,
                 "new_status": new_status.value,
             })
+        elif new_status == DeviceStatus.ONLINE:
+            device.last_seen = datetime.now(timezone.utc)
     
     await db.commit()
     

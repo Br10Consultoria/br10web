@@ -19,38 +19,40 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone="America/Bahia")
 
 
-async def check_device_reachable(ip: str, ports: list = None) -> bool:
-    """Verifica se um dispositivo está acessível via TCP connect nas portas de gerência."""
-    if ports is None:
-        ports = [22, 23, 80, 443, 8291]
-    
-    # Tenta TCP connect em cada porta
-    for port in ports:
-        try:
-            conn = asyncio.open_connection(ip, port)
-            reader, writer = await asyncio.wait_for(conn, timeout=3)
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
-            return True
-        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
-            continue
-        except Exception:
-            continue
-    
-    # Fallback: tenta ICMP ping
+async def tcp_connect(ip: str, port: int, timeout: float = 2.0) -> bool:
+    """Tenta uma conexão TCP simples. Retorna True se conectar."""
     try:
-        process = await asyncio.create_subprocess_exec(
-            'ping', '-c', '1', '-W', '2', ip,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(ip, port), timeout=timeout
         )
-        await asyncio.wait_for(process.communicate(), timeout=4)
-        return process.returncode == 0
+        writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+        except Exception:
+            pass
+        return True
     except Exception:
         return False
+
+
+async def check_device_reachable(ip: str, ports: list = None) -> bool:
+    """
+    Verifica se um dispositivo está acessível testando todas as portas
+    em PARALELO com timeout curto (2s por porta).
+    Sem ICMP/ping — não funciona em containers Docker sem NET_ADMIN.
+    """
+    if not ports:
+        ports = [22, 23, 80, 443, 8291]
+
+    # Remove duplicatas e portas inválidas
+    ports = list(set(p for p in ports if p and 1 <= p <= 65535))
+    if not ports:
+        ports = [22, 23, 80, 443, 8291]
+
+    # Testa todas as portas em paralelo — timeout de 2s por porta
+    tasks = [tcp_connect(ip, port, timeout=2.0) for port in ports]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return any(r is True for r in results)
 
 
 async def run_device_status_check():
@@ -84,7 +86,21 @@ async def run_device_status_check():
                 if d.https_port: ports.append(d.https_port)
                 return ports or [22, 23, 80, 443, 8291]
             
-            tasks = [check_device_reachable(device.management_ip, get_device_ports(device)) for device in devices]
+            # Cada dispositivo tem timeout global de 8s
+            async def check_with_timeout(device: Device) -> bool:
+                try:
+                    return await asyncio.wait_for(
+                        check_device_reachable(device.management_ip, get_device_ports(device)),
+                        timeout=8.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"[Scheduler] Timeout ao verificar {device.name} ({device.management_ip})")
+                    return False
+                except Exception as e:
+                    logger.warning(f"[Scheduler] Erro ao verificar {device.name}: {e}")
+                    return False
+
+            tasks = [check_with_timeout(device) for device in devices]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Atualiza status no banco
@@ -101,11 +117,15 @@ async def run_device_status_check():
                 if device.status != new_status:
                     old_status = device.status.value
                     device.status = new_status
+                    if is_online:
+                        device.last_seen = datetime.now(timezone.utc)
                     updated_count += 1
                     logger.info(
                         f"[Scheduler] {device.name} ({device.management_ip}): "
                         f"{old_status} → {new_status.value}"
                     )
+                elif is_online:
+                    device.last_seen = datetime.now(timezone.utc)
 
                 if is_online:
                     online_count += 1
