@@ -616,3 +616,64 @@ async def delete_credential(
     await db.delete(cred)
     await db.commit()
     return {"message": "Credencial removida com sucesso"}
+
+
+@router.post("/check-status")
+async def check_devices_status(
+    device_ids: Optional[List[str]] = None,
+    current_user: User = Depends(require_technician_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verifica o status dos dispositivos via ping e atualiza no banco."""
+    import asyncio
+    import platform
+    
+    # Se não especificar IDs, verifica todos
+    query = select(Device)
+    if device_ids:
+        query = query.where(Device.id.in_(device_ids))
+    
+    result = await db.execute(query)
+    devices = result.scalars().all()
+    
+    async def check_device(device: Device):
+        """Faz ping no dispositivo e retorna o status."""
+        try:
+            # Comando ping baseado no sistema operacional
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            command = f"ping {param} 1 -W 2 {device.management_ip}"
+            
+            # Executa o ping
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await asyncio.wait_for(process.communicate(), timeout=3)
+            
+            # Retorna online se o ping foi bem-sucedido (returncode 0)
+            return DeviceStatus.ONLINE if process.returncode == 0 else DeviceStatus.OFFLINE
+        except (asyncio.TimeoutError, Exception):
+            return DeviceStatus.OFFLINE
+    
+    # Verifica todos os dispositivos em paralelo
+    tasks = [check_device(device) for device in devices]
+    statuses = await asyncio.gather(*tasks)
+    
+    # Atualiza o status no banco
+    updated_count = 0
+    for device, new_status in zip(devices, statuses):
+        if device.status != new_status:
+            device.status = new_status
+            updated_count += 1
+    
+    await db.commit()
+    
+    return {
+        "message": f"Status verificado para {len(devices)} dispositivos",
+        "updated": updated_count,
+        "devices": [
+            {"id": str(device.id), "name": device.name, "ip": device.management_ip, "status": device.status.value}
+            for device in devices
+        ]
+    }

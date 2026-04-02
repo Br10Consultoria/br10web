@@ -9,6 +9,11 @@ import {
 import toast from 'react-hot-toast'
 import { devicesApi, vpnApi } from '../utils/api'
 import { useAuthStore } from '../store/authStore'
+import VlanFormModal from '../components/devices/VlanFormModal'
+import PortFormModal from '../components/devices/PortFormModal'
+import RouteFormModal from '../components/devices/RouteFormModal'
+import CredentialFormModal from '../components/devices/CredentialFormModal'
+import VpnFormModal from '../components/vpn/VpnFormModal'
 
 const DEVICE_TYPE_LABELS: Record<string, string> = {
   huawei_ne8000: 'Huawei NE8000',
@@ -298,17 +303,24 @@ function DeviceInfoTab({ device }: { device: any }) {
 }
 
 function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
+  const queryClient = useQueryClient()
+  const [showModal, setShowModal] = useState(false)
   const { data: vlans, isLoading } = useQuery({
     queryKey: ['vlans', deviceId],
     queryFn: () => devicesApi.getVlans(deviceId).then(r => r.data),
   })
+
+  const handleSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ['vlans', deviceId] })
+    setShowModal(false)
+  }
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-white">VLANs Configuradas</h3>
         {canEdit && (
-          <button className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar VLAN
           </button>
         )}
@@ -354,22 +366,36 @@ function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
           </table>
         </div>
       )}
+      {showModal && (
+        <VlanFormModal
+          deviceId={deviceId}
+          onClose={() => setShowModal(false)}
+          onSuccess={handleSuccess}
+        />
+      )}
     </div>
   )
 }
 
 function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
+  const queryClient = useQueryClient()
+  const [showModal, setShowModal] = useState(false)
   const { data: ports, isLoading } = useQuery({
     queryKey: ['ports', deviceId],
     queryFn: () => devicesApi.getPorts(deviceId).then(r => r.data),
   })
+
+  const handleSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ['ports', deviceId] })
+    setShowModal(false)
+  }
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-white">Portas do Dispositivo</h3>
         {canEdit && (
-          <button className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar Porta
           </button>
         )}
@@ -416,22 +442,36 @@ function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
           </table>
         </div>
       )}
+      {showModal && (
+        <PortFormModal
+          deviceId={deviceId}
+          onClose={() => setShowModal(false)}
+          onSuccess={handleSuccess}
+        />
+      )}
     </div>
   )
 }
 
 function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
+  const queryClient = useQueryClient()
+  const [showModal, setShowModal] = useState(false)
   const { data: vpnConfigs, isLoading } = useQuery({
     queryKey: ['vpn', deviceId],
     queryFn: () => vpnApi.list(deviceId).then(r => r.data),
   })
+
+  const handleSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ['vpn', deviceId] })
+    setShowModal(false)
+  }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-white">Configurações VPN L2TP</h3>
         {canEdit && (
-          <button className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Nova VPN
           </button>
         )}
@@ -492,26 +532,38 @@ function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
           ))}
         </div>
       )}
+      {showModal && (
+        <VpnFormModal
+          deviceId={deviceId}
+          onClose={() => setShowModal(false)}
+          onSuccess={handleSuccess}
+        />
+      )}
     </div>
   )
 }
 
 function RoutesTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
+  const queryClient = useQueryClient()
+  const [showModal, setShowModal] = useState(false)
   const { data: routes, isLoading } = useQuery({
     queryKey: ['routes', deviceId],
-    queryFn: () => devicesApi.getCredentials(deviceId).then(() =>
-      fetch(`/api/v1/devices/${deviceId}/routes`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` }
-      }).then(r => r.json())
-    ),
+    queryFn: () => fetch(`/api/v1/devices/${deviceId}/routes`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` }
+    }).then(r => r.json()),
   })
+
+  const handleSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ['routes', deviceId] })
+    setShowModal(false)
+  }
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-white">Rotas Estáticas</h3>
         {canEdit && (
-          <button className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar Rota
           </button>
         )}
@@ -552,6 +604,13 @@ function RoutesTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
             </tbody>
           </table>
         </div>
+      )}
+      {showModal && (
+        <RouteFormModal
+          deviceId={deviceId}
+          onClose={() => setShowModal(false)}
+          onSuccess={handleSuccess}
+        />
       )}
     </div>
   )
@@ -613,17 +672,24 @@ function PhotosTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
 }
 
 function CredentialsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
+  const queryClient = useQueryClient()
+  const [showModal, setShowModal] = useState(false)
   const { data: credentials, isLoading } = useQuery({
     queryKey: ['credentials', deviceId],
     queryFn: () => devicesApi.getCredentials(deviceId).then(r => r.data),
   })
+
+  const handleSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ['credentials', deviceId] })
+    setShowModal(false)
+  }
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-white">Credenciais de Acesso</h3>
         {canEdit && (
-          <button className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar
           </button>
         )}
@@ -650,6 +716,13 @@ function CredentialsTab({ deviceId, canEdit }: { deviceId: string; canEdit: bool
             </div>
           ))}
         </div>
+      )}
+      {showModal && (
+        <CredentialFormModal
+          deviceId={deviceId}
+          onClose={() => setShowModal(false)}
+          onSuccess={handleSuccess}
+        />
       )}
     </div>
   )
