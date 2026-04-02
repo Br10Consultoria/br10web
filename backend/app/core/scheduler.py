@@ -4,7 +4,6 @@ Background tasks agendados usando APScheduler.
 """
 import asyncio
 import logging
-import platform
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,19 +19,37 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone="America/Bahia")
 
 
-async def check_device_ping(ip: str) -> bool:
-    """Faz ping em um dispositivo e retorna True se estiver online."""
+async def check_device_reachable(ip: str, ports: list = None) -> bool:
+    """Verifica se um dispositivo está acessível via TCP connect nas portas de gerência."""
+    if ports is None:
+        ports = [22, 23, 80, 443, 8291]
+    
+    # Tenta TCP connect em cada porta
+    for port in ports:
+        try:
+            conn = asyncio.open_connection(ip, port)
+            reader, writer = await asyncio.wait_for(conn, timeout=3)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+            continue
+        except Exception:
+            continue
+    
+    # Fallback: tenta ICMP ping
     try:
-        param = "-n" if platform.system().lower() == "windows" else "-c"
-        command = f"ping {param} 1 -W 2 {ip}"
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        process = await asyncio.create_subprocess_exec(
+            'ping', '-c', '1', '-W', '2', ip,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
         )
         await asyncio.wait_for(process.communicate(), timeout=4)
         return process.returncode == 0
-    except (asyncio.TimeoutError, Exception):
+    except Exception:
         return False
 
 
@@ -58,8 +75,16 @@ async def run_device_status_check():
 
             logger.info(f"[Scheduler] Verificando {len(devices)} dispositivos...")
 
-            # Verifica todos em paralelo
-            tasks = [check_device_ping(device.management_ip) for device in devices]
+            # Verifica todos em paralelo (TCP connect nas portas de gerência)
+            def get_device_ports(d: Device) -> list:
+                ports = []
+                if d.ssh_port: ports.append(d.ssh_port)
+                if d.telnet_port: ports.append(d.telnet_port)
+                if d.http_port: ports.append(d.http_port)
+                if d.https_port: ports.append(d.https_port)
+                return ports or [22, 23, 80, 443, 8291]
+            
+            tasks = [check_device_reachable(device.management_ip, get_device_ports(device)) for device in devices]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Atualiza status no banco

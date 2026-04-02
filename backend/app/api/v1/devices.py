@@ -6,6 +6,7 @@ import os
 import uuid
 import aiofiles
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
@@ -618,43 +619,74 @@ async def delete_credential(
     return {"message": "Credencial removida com sucesso"}
 
 
+class CheckStatusRequest(BaseModel):
+    device_ids: Optional[List[str]] = None
+
+
 @router.post("/check-status")
 async def check_devices_status(
-    device_ids: Optional[List[str]] = None,
+    body: Optional[CheckStatusRequest] = None,
     current_user: User = Depends(require_technician_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verifica o status dos dispositivos via ping e atualiza no banco."""
+    """Verifica o status dos dispositivos via TCP connect e atualiza no banco."""
     import asyncio
-    import platform
     
-    # Se não especificar IDs, verifica todos
-    query = select(Device)
+    # Se não especificar IDs, verifica todos (exceto em manutenção)
+    device_ids = body.device_ids if body else None
+    query = select(Device).where(Device.status != DeviceStatus.MAINTENANCE)
     if device_ids:
-        query = query.where(Device.id.in_(device_ids))
+        query = select(Device).where(Device.id.in_(device_ids))
     
     result = await db.execute(query)
     devices = result.scalars().all()
     
-    async def check_device(device: Device):
-        """Faz ping no dispositivo e retorna o status."""
+    async def check_device(device: Device) -> DeviceStatus:
+        """Tenta conexão TCP nas portas de gerência do dispositivo."""
+        ip = device.management_ip
+        # Portas para tentar (em ordem de prioridade)
+        ports_to_try = []
+        if device.ssh_port:
+            ports_to_try.append(device.ssh_port)
+        if device.telnet_port:
+            ports_to_try.append(device.telnet_port)
+        if device.http_port:
+            ports_to_try.append(device.http_port)
+        if device.https_port:
+            ports_to_try.append(device.https_port)
+        # Portas padrão se nenhuma configurada
+        if not ports_to_try:
+            ports_to_try = [22, 23, 80, 443, 8291]
+        
+        for port in ports_to_try:
+            try:
+                conn = asyncio.open_connection(ip, port)
+                reader, writer = await asyncio.wait_for(conn, timeout=3)
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                return DeviceStatus.ONLINE
+            except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+                continue
+            except Exception:
+                continue
+        
+        # Também tenta ICMP ping como fallback
         try:
-            # Comando ping baseado no sistema operacional
-            param = '-n' if platform.system().lower() == 'windows' else '-c'
-            command = f"ping {param} 1 -W 2 {device.management_ip}"
-            
-            # Executa o ping
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            process = await asyncio.create_subprocess_exec(
+                'ping', '-c', '1', '-W', '2', ip,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
             )
-            await asyncio.wait_for(process.communicate(), timeout=3)
-            
-            # Retorna online se o ping foi bem-sucedido (returncode 0)
-            return DeviceStatus.ONLINE if process.returncode == 0 else DeviceStatus.OFFLINE
-        except (asyncio.TimeoutError, Exception):
-            return DeviceStatus.OFFLINE
+            await asyncio.wait_for(process.communicate(), timeout=4)
+            if process.returncode == 0:
+                return DeviceStatus.ONLINE
+        except Exception:
+            pass
+        
+        return DeviceStatus.OFFLINE
     
     # Verifica todos os dispositivos em paralelo
     tasks = [check_device(device) for device in devices]

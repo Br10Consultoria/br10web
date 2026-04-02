@@ -12,7 +12,12 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import api from '../utils/api'
 
-const COLORS = ['#22c55e', '#ef4444', '#f59e0b', '#64748b']
+const STATUS_COLORS: Record<string, string> = {
+  Online: '#22c55e',
+  Offline: '#ef4444',
+  'Manutenção': '#f59e0b',
+  Desconhecido: '#64748b',
+}
 
 const DEVICE_TYPE_LABELS: Record<string, string> = {
   huawei_ne8000: 'Huawei NE8000',
@@ -107,7 +112,7 @@ export default function DashboardPage() {
     { name: 'Offline', value: stats.offline || 0 },
     { name: 'Manutenção', value: stats.maintenance || 0 },
     { name: 'Desconhecido', value: stats.unknown || 0 },
-  ].filter(d => d.value > 0) : []
+  ].filter(d => d.value > 0) : []  // cores fixas por nome, não por índice
 
   // Calcular disponibilidade geral
   const availability = stats && stats.total > 0
@@ -207,8 +212,8 @@ export default function DashboardPage() {
                     paddingAngle={3}
                     dataKey="value"
                   >
-                    {pieData.map((_, index) => (
-                      <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                    {pieData.map((entry, index) => (
+                      <Cell key={index} fill={STATUS_COLORS[entry.name] || '#64748b'} />
                     ))}
                   </Pie>
                   <Tooltip

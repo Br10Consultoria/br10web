@@ -22,10 +22,28 @@ const DEVICE_TYPES = [
 const PROTOCOLS = [
   { value: 'ssh', label: 'SSH' },
   { value: 'telnet', label: 'Telnet' },
-  { value: 'winbox', label: 'Winbox (Mikrotik)' },
+  { value: 'winbox', label: 'Winbox' },
   { value: 'http', label: 'HTTP' },
   { value: 'https', label: 'HTTPS' },
 ]
+
+// Portas padrão por protocolo
+const DEFAULT_PORTS: Record<string, number> = {
+  ssh: 22,
+  telnet: 23,
+  winbox: 8291,
+  http: 80,
+  https: 443,
+}
+
+// Mapeamento de protocolo para campo no backend
+const PROTOCOL_FIELD: Record<string, string> = {
+  ssh: 'ssh_port',
+  telnet: 'telnet_port',
+  winbox: 'winbox_port',
+  http: 'http_port',
+  https: 'https_port',
+}
 
 interface Props {
   device?: any
@@ -38,7 +56,41 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const isEdit = !!device
 
-  const { register, handleSubmit, formState: { errors }, watch } = useForm({
+  // Inicializar protocolos habilitados com base no dispositivo existente
+  const initEnabledProtocols = (): Record<string, boolean> => {
+    if (!device) {
+      // Novo dispositivo: SSH habilitado por padrão
+      return { ssh: true, telnet: false, winbox: false, http: false, https: false }
+    }
+    return {
+      ssh: !!device.ssh_port,
+      telnet: !!device.telnet_port,
+      winbox: !!device.winbox_port,
+      http: !!device.http_port,
+      https: !!device.https_port,
+    }
+  }
+
+  // Inicializar portas com base no dispositivo existente
+  const initPorts = (): Record<string, number> => {
+    if (!device) return { ...DEFAULT_PORTS }
+    return {
+      ssh: device.ssh_port || DEFAULT_PORTS.ssh,
+      telnet: device.telnet_port || DEFAULT_PORTS.telnet,
+      winbox: device.winbox_port || DEFAULT_PORTS.winbox,
+      http: device.http_port || DEFAULT_PORTS.http,
+      https: device.https_port || DEFAULT_PORTS.https,
+    }
+  }
+
+  const [enabledProtocols, setEnabledProtocols] = useState<Record<string, boolean>>(initEnabledProtocols)
+  const [ports, setPorts] = useState<Record<string, number>>(initPorts)
+
+  const toggleProtocol = (proto: string) => {
+    setEnabledProtocols(prev => ({ ...prev, [proto]: !prev[proto] }))
+  }
+
+  const { register, handleSubmit, formState: { errors } } = useForm({
     defaultValues: device ? {
       name: device.name,
       hostname: device.hostname || '',
@@ -51,15 +103,10 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
       firmware_version: device.firmware_version || '',
       serial_number: device.serial_number || '',
       management_ip: device.management_ip,
-      primary_protocol: device.primary_protocol,
+      primary_protocol: device.primary_protocol || 'ssh',
       username: device.username || '',
       password: '',
       enable_password: '',
-      ssh_port: device.ssh_port || 22,
-      telnet_port: device.telnet_port || 23,
-      winbox_port: device.winbox_port || 8291,
-      http_port: device.http_port || 80,
-      https_port: device.https_port || 443,
       subnet_mask: device.subnet_mask || '',
       gateway: device.gateway || '',
       dns_primary: device.dns_primary || '',
@@ -68,17 +115,21 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
       notes: device.notes || '',
     } : {
       primary_protocol: 'ssh',
-      ssh_port: 22,
-      telnet_port: 23,
-      winbox_port: 8291,
-      http_port: 80,
-      https_port: 443,
     },
   })
 
   const mutation = useMutation({
-    mutationFn: (data: any) =>
-      isEdit ? devicesApi.update(device.id, data) : devicesApi.create(data),
+    mutationFn: (data: any) => {
+      // Adicionar portas habilitadas ao payload
+      const portData: Record<string, number | null> = {}
+      for (const proto of Object.keys(enabledProtocols)) {
+        const field = PROTOCOL_FIELD[proto]
+        portData[field] = enabledProtocols[proto] ? ports[proto] : null
+      }
+      return isEdit
+        ? devicesApi.update(device.id, { ...data, ...portData })
+        : devicesApi.create({ ...data, ...portData })
+    },
     onSuccess: () => {
       toast.success(isEdit ? 'Dispositivo atualizado!' : 'Dispositivo cadastrado!')
       onSuccess()
@@ -117,6 +168,7 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
               <div className="sm:col-span-2">
                 <label className="label">Nome *</label>
                 <input {...register('name', { required: true })} className="input" placeholder="Ex: Core Router SP01" />
+                {errors.name && <p className="text-red-400 text-xs mt-1">Campo obrigatório</p>}
               </div>
               <div>
                 <label className="label">Hostname</label>
@@ -130,6 +182,7 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
+                {errors.device_type && <p className="text-red-400 text-xs mt-1">Campo obrigatório</p>}
               </div>
               <div>
                 <label className="label">Fabricante</label>
@@ -163,13 +216,17 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
               <div>
                 <label className="label">IP de Gerência *</label>
                 <input {...register('management_ip', { required: true })} className="input font-mono" placeholder="192.168.1.1" />
+                {errors.management_ip && <p className="text-red-400 text-xs mt-1">Campo obrigatório</p>}
               </div>
               <div>
                 <label className="label">Protocolo Principal</label>
                 <select {...register('primary_protocol')} className="input">
-                  {PROTOCOLS.map(p => (
+                  {PROTOCOLS.filter(p => enabledProtocols[p.value]).map(p => (
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
+                  {!Object.values(enabledProtocols).some(Boolean) && (
+                    <option value="">Nenhum protocolo habilitado</option>
+                  )}
                 </select>
               </div>
               <div>
@@ -203,22 +260,67 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
             </div>
           </div>
 
-          {/* Portas */}
+          {/* Portas de Acesso com checkboxes */}
           <div>
-            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">
+            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-1">
               Portas de Acesso
             </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              {[
-                { label: 'SSH', field: 'ssh_port' },
-                { label: 'Telnet', field: 'telnet_port' },
-                { label: 'Winbox', field: 'winbox_port' },
-                { label: 'HTTP', field: 'http_port' },
-                { label: 'HTTPS', field: 'https_port' },
-              ].map(({ label, field }) => (
-                <div key={field}>
-                  <label className="label">{label}</label>
-                  <input {...register(field as any, { valueAsNumber: true })} type="number" className="input text-center font-mono" />
+            <p className="text-xs text-dark-400 mb-3">
+              Selecione os protocolos disponíveis neste dispositivo e configure as portas.
+            </p>
+            <div className="space-y-2">
+              {PROTOCOLS.map(({ value: proto, label }) => (
+                <div
+                  key={proto}
+                  className={`flex items-center gap-4 p-3 rounded-lg border transition-colors ${
+                    enabledProtocols[proto]
+                      ? 'border-brand-600/40 bg-brand-600/5'
+                      : 'border-dark-700 bg-dark-900/30'
+                  }`}
+                >
+                  {/* Checkbox toggle */}
+                  <button
+                    type="button"
+                    onClick={() => toggleProtocol(proto)}
+                    className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
+                      enabledProtocols[proto]
+                        ? 'bg-brand-600 border-brand-600'
+                        : 'bg-transparent border-2 border-dark-600 hover:border-dark-400'
+                    }`}
+                  >
+                    {enabledProtocols[proto] && (
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </button>
+
+                  {/* Label */}
+                  <span
+                    className={`w-16 text-sm font-medium cursor-pointer select-none ${
+                      enabledProtocols[proto] ? 'text-white' : 'text-dark-500'
+                    }`}
+                    onClick={() => toggleProtocol(proto)}
+                  >
+                    {label}
+                  </span>
+
+                  {/* Campo de porta — só aparece quando habilitado */}
+                  {enabledProtocols[proto] ? (
+                    <div className="flex items-center gap-2 ml-auto">
+                      <span className="text-xs text-dark-400">Porta:</span>
+                      <input
+                        type="number"
+                        value={ports[proto]}
+                        onChange={e => setPorts(prev => ({ ...prev, [proto]: parseInt(e.target.value) || DEFAULT_PORTS[proto] }))}
+                        className="input w-24 text-center font-mono py-1.5 text-sm"
+                        min={1}
+                        max={65535}
+                      />
+                    </div>
+                  ) : (
+                    <span className="ml-auto text-xs text-dark-600 italic">Desabilitado</span>
+                  )}
                 </div>
               ))}
             </div>
