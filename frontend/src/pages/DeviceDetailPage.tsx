@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Terminal, Shield, Network, Server, Edit2, Trash2,
   Wifi, WifiOff, AlertTriangle, Settings, Upload, Plus, RefreshCw,
-  Key, Globe, Layers, GitBranch, Camera, Activity, CheckCircle, Eye, EyeOff
+  Key, Globe, Layers, GitBranch, Camera, Activity, CheckCircle, Eye, EyeOff,
+  Zap, Clock, Radio
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { devicesApi, vpnApi, routesApi } from '../utils/api'
@@ -266,27 +267,8 @@ function DeviceInfoTab({ device }: { device: any }) {
         )}
       </div>
 
-      {/* Monitoramento — só mostra se houver dados */}
-      {(device.last_seen || device.uptime_seconds !== undefined || device.cpu_usage !== undefined || device.memory_usage !== undefined) && (
-        <div className="card">
-          <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-4">Monitoramento</h3>
-          {device.last_seen && (
-            <InfoRow label="Último Acesso" value={new Date(device.last_seen).toLocaleString('pt-BR')} />
-          )}
-          {device.uptime_seconds !== null && device.uptime_seconds !== undefined && (
-            <InfoRow
-              label="Uptime"
-              value={`${Math.floor(device.uptime_seconds / 86400)}d ${Math.floor((device.uptime_seconds % 86400) / 3600)}h`}
-            />
-          )}
-          {device.cpu_usage !== null && device.cpu_usage !== undefined && (
-            <InfoRow label="CPU" value={`${device.cpu_usage.toFixed(1)}%`} />
-          )}
-          {device.memory_usage !== null && device.memory_usage !== undefined && (
-            <InfoRow label="Memória" value={`${device.memory_usage.toFixed(1)}%`} />
-          )}
-        </div>
-      )}
+      {/* Monitoramento — sempre visível */}
+      <MonitoringCard device={device} />
 
       {/* Observações */}
       {device.notes && (
@@ -307,6 +289,167 @@ function DeviceInfoTab({ device }: { device: any }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── MonitoringCard ───────────────────────────────────────────────────────────
+function MonitoringCard({ device }: { device: any }) {
+  const queryClient = useQueryClient()
+  const [isChecking, setIsChecking] = useState(false)
+
+  const STATUS_COLORS: Record<string, string> = {
+    online: 'text-green-400 bg-green-400/10',
+    offline: 'text-red-400 bg-red-400/10',
+    maintenance: 'text-yellow-400 bg-yellow-400/10',
+    unknown: 'text-slate-400 bg-slate-400/10',
+    alert: 'text-orange-400 bg-orange-400/10',
+  }
+
+  const STATUS_LABELS: Record<string, string> = {
+    online: 'Online',
+    offline: 'Offline',
+    maintenance: 'Manutenção',
+    unknown: 'Desconhecido',
+    alert: 'Alerta',
+  }
+
+  const handleCheckNow = async () => {
+    setIsChecking(true)
+    try {
+      const res = await devicesApi.checkStatus(device.id)
+      const { old_status, new_status, changed } = res.data
+      if (changed) {
+        toast.success(`Status atualizado: ${STATUS_LABELS[old_status] || old_status} → ${STATUS_LABELS[new_status] || new_status}`)
+      } else {
+        toast.success(`Status confirmado: ${STATUS_LABELS[new_status] || new_status}`)
+      }
+      queryClient.invalidateQueries({ queryKey: ['device', device.id] })
+      queryClient.invalidateQueries({ queryKey: ['devices'] })
+    } catch {
+      toast.error('Erro ao verificar status')
+    } finally {
+      setIsChecking(false)
+    }
+  }
+
+  const statusKey = device.status || 'unknown'
+  const colorClass = STATUS_COLORS[statusKey] || STATUS_COLORS.unknown
+  const statusLabel = STATUS_LABELS[statusKey] || statusKey
+
+  const formatDate = (iso: string | null) => {
+    if (!iso) return null
+    return new Date(iso).toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    })
+  }
+
+  const formatUptime = (seconds: number | null) => {
+    if (seconds === null || seconds === undefined) return null
+    const d = Math.floor(seconds / 86400)
+    const h = Math.floor((seconds % 86400) / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    if (d > 0) return `${d}d ${h}h ${m}m`
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m`
+  }
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Radio className="w-4 h-4 text-brand-400" />
+          <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider">Monitoramento</h3>
+        </div>
+        <button
+          onClick={handleCheckNow}
+          disabled={isChecking}
+          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg bg-brand-600/20 text-brand-400 hover:bg-brand-600/30 transition-colors disabled:opacity-50"
+        >
+          {isChecking ? (
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Zap className="w-3.5 h-3.5" />
+          )}
+          Verificar Agora
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+        {/* Status atual */}
+        <div className="bg-dark-900/50 rounded-xl p-4 flex flex-col items-center gap-2">
+          <span className="text-xs text-dark-400 uppercase tracking-wider">Status</span>
+          <span className={`px-3 py-1 rounded-full text-sm font-semibold ${colorClass}`}>
+            {statusLabel}
+          </span>
+        </div>
+
+        {/* Último check */}
+        <div className="bg-dark-900/50 rounded-xl p-4 flex flex-col items-center gap-2">
+          <Clock className="w-4 h-4 text-dark-500" />
+          <span className="text-xs text-dark-400 uppercase tracking-wider">Último Acesso</span>
+          <span className="text-xs text-dark-300 text-center">
+            {formatDate(device.last_seen) || <span className="text-dark-600 italic">Nunca verificado</span>}
+          </span>
+        </div>
+
+        {/* Uptime */}
+        <div className="bg-dark-900/50 rounded-xl p-4 flex flex-col items-center gap-2">
+          <Activity className="w-4 h-4 text-dark-500" />
+          <span className="text-xs text-dark-400 uppercase tracking-wider">Uptime</span>
+          <span className="text-sm font-mono text-dark-300">
+            {formatUptime(device.uptime_seconds) || <span className="text-dark-600 italic">—</span>}
+          </span>
+        </div>
+
+        {/* Último backup */}
+        <div className="bg-dark-900/50 rounded-xl p-4 flex flex-col items-center gap-2">
+          <CheckCircle className="w-4 h-4 text-dark-500" />
+          <span className="text-xs text-dark-400 uppercase tracking-wider">Último Backup</span>
+          <span className="text-xs text-dark-300 text-center">
+            {formatDate(device.last_backup) || <span className="text-dark-600 italic">Nenhum</span>}
+          </span>
+        </div>
+      </div>
+
+      {/* CPU e Memória se disponíveis */}
+      {(device.cpu_usage !== null && device.cpu_usage !== undefined) && (
+        <div className="mt-2">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-dark-400">CPU</span>
+            <span className="text-dark-300 font-mono">{device.cpu_usage.toFixed(1)}%</span>
+          </div>
+          <div className="w-full bg-dark-700 rounded-full h-1.5">
+            <div
+              className={`h-1.5 rounded-full transition-all ${
+                device.cpu_usage > 80 ? 'bg-red-500' : device.cpu_usage > 60 ? 'bg-yellow-500' : 'bg-green-500'
+              }`}
+              style={{ width: `${Math.min(device.cpu_usage, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {(device.memory_usage !== null && device.memory_usage !== undefined) && (
+        <div className="mt-2">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-dark-400">Memória</span>
+            <span className="text-dark-300 font-mono">{device.memory_usage.toFixed(1)}%</span>
+          </div>
+          <div className="w-full bg-dark-700 rounded-full h-1.5">
+            <div
+              className={`h-1.5 rounded-full transition-all ${
+                device.memory_usage > 80 ? 'bg-red-500' : device.memory_usage > 60 ? 'bg-yellow-500' : 'bg-blue-500'
+              }`}
+              style={{ width: `${Math.min(device.memory_usage, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <p className="text-xs text-dark-600 mt-4">
+        Verificação automática a cada 5 minutos via TCP nas portas configuradas.
+      </p>
     </div>
   )
 }

@@ -113,6 +113,10 @@ export const devicesApi = {
   getCredentials: (id: string) => api.get(`/devices/${id}/credentials`),
   createCredential: (id: string, data: any) => api.post(`/devices/${id}/credentials`, data),
   deleteCredential: (id: string, credId: string) => api.delete(`/devices/${id}/credentials/${credId}`),
+
+  // Status check
+  checkStatus: (id: string) => api.post(`/devices/${id}/check-status`),
+  checkAllStatus: (deviceIds?: string[]) => api.post('/devices/check-status', deviceIds ? { device_ids: deviceIds } : {}),
 }
 
 export const vpnApi = {

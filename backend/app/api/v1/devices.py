@@ -5,6 +5,7 @@ CRUD completo para dispositivos de rede.
 import os
 import uuid
 import aiofiles
+from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
@@ -195,7 +196,14 @@ async def update_device(
         "status": device.status.value if device.status else None,
     }
 
-    update_dict = device_data.dict(exclude_none=True, exclude={"password", "enable_password"})
+    # exclude_unset=True: só atualiza campos enviados pelo cliente
+    # Isso permite zerar campos opcionais (winbox_port, http_port, https_port) enviando null
+    update_dict = device_data.dict(exclude_unset=True, exclude={"password", "enable_password"})
+    # Garantir que ssh_port e telnet_port nunca sejam None (NOT NULL no banco)
+    if "ssh_port" in update_dict and update_dict["ssh_port"] is None:
+        update_dict["ssh_port"] = 22
+    if "telnet_port" in update_dict and update_dict["telnet_port"] is None:
+        update_dict["telnet_port"] = 23
 
     # Criptografar credenciais se fornecidas
     if device_data.password:
@@ -621,6 +629,63 @@ async def delete_credential(
 
 class CheckStatusRequest(BaseModel):
     device_ids: Optional[List[str]] = None
+
+
+@router.post("/{device_id}/check-status")
+async def check_single_device_status(
+    device_id: str,
+    current_user: User = Depends(require_technician_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verifica o status de um dispositivo específico via TCP connect."""
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispositivo não encontrado")
+
+    ip = device.management_ip
+    ports_to_try = []
+    if device.ssh_port:
+        ports_to_try.append(device.ssh_port)
+    if device.telnet_port:
+        ports_to_try.append(device.telnet_port)
+    if device.http_port:
+        ports_to_try.append(device.http_port)
+    if device.https_port:
+        ports_to_try.append(device.https_port)
+    if not ports_to_try:
+        ports_to_try = [22, 23, 80, 443]
+
+    new_status = DeviceStatus.OFFLINE
+    for port in ports_to_try:
+        try:
+            import asyncio as _asyncio
+            conn = _asyncio.open_connection(ip, port)
+            reader, writer = await _asyncio.wait_for(conn, timeout=3)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            new_status = DeviceStatus.ONLINE
+            break
+        except Exception:
+            continue
+
+    old_status = device.status
+    device.status = new_status
+    device.last_seen = datetime.now(timezone.utc) if new_status == DeviceStatus.ONLINE else device.last_seen
+    await db.commit()
+
+    return {
+        "id": str(device.id),
+        "name": device.name,
+        "ip": device.management_ip,
+        "old_status": old_status.value,
+        "new_status": new_status.value,
+        "changed": old_status != new_status,
+        "last_seen": device.last_seen.isoformat() if device.last_seen else None,
+    }
 
 
 @router.post("/check-status")

@@ -163,8 +163,9 @@ class DeviceUpdate(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
     enable_password: Optional[str] = None
-    ssh_port: Optional[int] = None
-    telnet_port: Optional[int] = None
+    # ssh_port e telnet_port são NOT NULL no banco; usar valor padrão se não informado
+    ssh_port: int = 22
+    telnet_port: int = 23
     winbox_port: Optional[int] = None
     http_port: Optional[int] = None
     https_port: Optional[int] = None
