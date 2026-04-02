@@ -4,6 +4,25 @@ import toast from 'react-hot-toast'
 import { backupApi } from '../utils/api'
 import { useAuthStore } from '../store/authStore'
 
+// Download autenticado: usa fetch com token JWT e cria blob para download
+async function downloadBackupFile(filename: string, token: string) {
+  const res = await fetch(`/api/v1/backup/download/${filename}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    throw new Error(`Erro ${res.status}: ${res.statusText}`)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B'
   const k = 1024
@@ -13,9 +32,19 @@ function formatBytes(bytes: number): string {
 }
 
 export default function BackupPage() {
-  const { user } = useAuthStore()
+  const { user, accessToken } = useAuthStore()
   const queryClient = useQueryClient()
   const isAdmin = user?.role === 'admin'
+
+  const handleDownload = async (filename: string) => {
+    if (!accessToken) { toast.error('Sem autenticação'); return }
+    try {
+      await downloadBackupFile(filename, accessToken)
+      toast.success('Download iniciado!')
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao baixar backup')
+    }
+  }
 
   const { data: backups = [], isLoading, refetch } = useQuery({
     queryKey: ['backups'],
@@ -130,13 +159,13 @@ export default function BackupPage() {
                     {isAdmin && (
                       <td>
                         <div className="flex gap-1">
-                          <a
-                            href={`/api/v1/backup/download/${b.filename}`}
-                            download
+                          <button
+                            onClick={() => handleDownload(b.filename)}
                             className="btn-secondary btn-sm"
+                            title="Baixar backup"
                           >
                             <Download className="w-3.5 h-3.5" />
-                          </a>
+                          </button>
                           <button
                             onClick={() => handleRestore(b.filename)}
                             disabled={restoreMutation.isPending}

@@ -15,6 +15,7 @@ import PortFormModal from '../components/devices/PortFormModal'
 import RouteFormModal from '../components/devices/RouteFormModal'
 import CredentialFormModal from '../components/devices/CredentialFormModal'
 import VpnFormModal from '../components/vpn/VpnFormModal'
+import DeviceFormModal from '../components/devices/DeviceFormModal'
 
 const DEVICE_TYPE_LABELS: Record<string, string> = {
   huawei_ne8000: 'Huawei NE8000',
@@ -46,6 +47,7 @@ export default function DeviceDetailPage() {
   const { user } = useAuthStore()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<TabType>('info')
+  const [showEditModal, setShowEditModal] = useState(false)
 
   const { data: device, isLoading } = useQuery({
     queryKey: ['device', id],
@@ -149,7 +151,7 @@ export default function DeviceDetailPage() {
           )}
           {canEdit && (
             <button
-              onClick={() => navigate(`/devices/${id}/edit`)}
+              onClick={() => setShowEditModal(true)}
               className="btn btn-secondary flex items-center gap-2 text-sm"
             >
               <Edit2 className="w-4 h-4" /> Editar
@@ -199,6 +201,19 @@ export default function DeviceDetailPage() {
       {activeTab === 'routes' && <RoutesTab deviceId={device.id} canEdit={canEdit} />}
       {activeTab === 'photos' && <PhotosTab deviceId={device.id} canEdit={canEdit} />}
       {activeTab === 'credentials' && <CredentialsTab deviceId={device.id} canEdit={canEdit} />}
+
+      {/* Modal de edição do dispositivo */}
+      {showEditModal && (
+        <DeviceFormModal
+          device={device}
+          onClose={() => setShowEditModal(false)}
+          onSuccess={() => {
+            setShowEditModal(false)
+            queryClient.invalidateQueries({ queryKey: ['device', id] })
+            queryClient.invalidateQueries({ queryKey: ['devices'] })
+          }}
+        />
+      )}
     </div>
   )
 }
