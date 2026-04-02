@@ -31,7 +31,7 @@ export default function SettingsPage() {
   const [showCurrentPwd, setShowCurrentPwd] = useState(false)
   const [showNewPwd, setShowNewPwd] = useState(false)
   const [isChangingPwd, setIsChangingPwd] = useState(false)
-  const [setup2FAData, setSetup2FAData] = useState<{ qr_code: string; secret: string } | null>(null)
+  const [setup2FAData, setSetup2FAData] = useState<{ qr_code_base64: string; secret: string; provisioning_uri: string } | null>(null)
   const [totpCode, setTotpCode] = useState('')
   const [is2FALoading, setIs2FALoading] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -283,7 +283,7 @@ export default function SettingsPage() {
                       Escaneie o QR Code com seu aplicativo autenticador:
                     </p>
                     <div className="inline-block bg-white p-4 rounded-xl">
-                      <img src={setup2FAData.qr_code} alt="QR Code 2FA" className="w-48 h-48" />
+                      <img src={setup2FAData.qr_code_base64} alt="QR Code 2FA" className="w-48 h-48" />
                     </div>
                   </div>
 

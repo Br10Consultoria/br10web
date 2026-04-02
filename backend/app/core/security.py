@@ -111,7 +111,7 @@ def get_totp_uri(secret: str, username: str) -> str:
 
 
 def generate_qr_code_base64(uri: str) -> str:
-    """Gera QR Code em base64 para exibição no frontend."""
+    """Gera QR Code em base64 para exibição no frontend com prefixo data URI."""
     qr = qrcode.QRCode(version=1, box_size=10, border=5)
     qr.add_data(uri)
     qr.make(fit=True)
@@ -119,7 +119,8 @@ def generate_qr_code_base64(uri: str) -> str:
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
     buffer.seek(0)
-    return base64.b64encode(buffer.read()).decode("utf-8")
+    img_base64 = base64.b64encode(buffer.read()).decode("utf-8")
+    return f"data:image/png;base64,{img_base64}"
 
 
 def verify_totp(secret: str, token: str) -> bool:
@@ -131,12 +132,21 @@ def verify_totp(secret: str, token: str) -> bool:
 # ─── Field-Level Encryption (Fernet) ─────────────────────────────────────────
 def get_fernet() -> Fernet:
     """Retorna instância Fernet para criptografia de campos sensíveis."""
+    import hashlib
+    
+    # Tentar usar ENCRYPTION_KEY se fornecida
     if settings.ENCRYPTION_KEY:
-        key = settings.ENCRYPTION_KEY.encode()
-    else:
-        import hashlib
-        key_bytes = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
-        key = base64.urlsafe_b64encode(key_bytes)
+        try:
+            # Verificar se é uma chave Fernet válida (32 bytes base64)
+            key = settings.ENCRYPTION_KEY.encode()
+            return Fernet(key)
+        except Exception:
+            # Se inválida, gerar chave derivada do SECRET_KEY
+            pass
+    
+    # Fallback: gerar chave válida a partir do SECRET_KEY
+    key_bytes = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
+    key = base64.urlsafe_b64encode(key_bytes)
     return Fernet(key)
 
 
