@@ -4,7 +4,8 @@ Schemas Pydantic para VPN L2TP e rotas estáticas.
 """
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from uuid import UUID
+from pydantic import BaseModel, Field, field_serializer
 
 
 class StaticRouteCreate(BaseModel):
@@ -28,9 +29,9 @@ class StaticRouteUpdate(BaseModel):
 
 
 class StaticRouteResponse(BaseModel):
-    id: str
-    device_id: str
-    vpn_config_id: Optional[str]
+    id: UUID
+    device_id: UUID
+    vpn_config_id: Optional[UUID]
     destination_network: str
     next_hop: str
     interface: Optional[str]
@@ -42,6 +43,14 @@ class StaticRouteResponse(BaseModel):
     last_verified: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer('id', 'device_id')
+    def serialize_uuid(self, v: UUID) -> str:
+        return str(v)
+
+    @field_serializer('vpn_config_id')
+    def serialize_optional_uuid(self, v: Optional[UUID]) -> Optional[str]:
+        return str(v) if v else None
 
     class Config:
         from_attributes = True
@@ -102,8 +111,8 @@ class VpnConfigUpdate(BaseModel):
 
 
 class VpnConfigResponse(BaseModel):
-    id: str
-    device_id: str
+    id: UUID
+    device_id: UUID
     name: str
     description: Optional[str]
     vpn_type: str
@@ -131,6 +140,10 @@ class VpnConfigResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     static_routes: Optional[List[StaticRouteResponse]] = []
+
+    @field_serializer('id', 'device_id')
+    def serialize_uuid(self, v: UUID) -> str:
+        return str(v)
 
     class Config:
         from_attributes = True

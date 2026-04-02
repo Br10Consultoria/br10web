@@ -4,7 +4,8 @@ Schemas Pydantic para dispositivos de rede.
 """
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field, validator
+from uuid import UUID
+from pydantic import BaseModel, Field, validator, field_serializer
 import ipaddress
 
 
@@ -30,8 +31,13 @@ class VlanCreate(BaseModel):
 
 
 class VlanResponse(VlanCreate):
-    id: str
-    device_id: str
+    id: UUID
+    device_id: UUID
+
+    @field_serializer('id', 'device_id')
+    def serialize_uuid(self, v: UUID) -> str:
+        return str(v)
+
     created_at: datetime
     updated_at: datetime
 
@@ -57,8 +63,13 @@ class PortCreate(BaseModel):
 
 
 class PortResponse(PortCreate):
-    id: str
-    device_id: str
+    id: UUID
+    device_id: UUID
+
+    @field_serializer('id', 'device_id')
+    def serialize_uuid(self, v: UUID) -> str:
+        return str(v)
+
     created_at: datetime
     updated_at: datetime
 
@@ -76,8 +87,13 @@ class CredentialCreate(BaseModel):
 
 
 class CredentialResponse(BaseModel):
-    id: str
-    device_id: str
+    id: UUID
+    device_id: UUID
+
+    @field_serializer('id', 'device_id')
+    def serialize_uuid(self, v: UUID) -> str:
+        return str(v)
+
     credential_type: str
     username: Optional[str]
     description: Optional[str]
@@ -165,7 +181,7 @@ class DeviceUpdate(BaseModel):
 
 
 class DeviceResponse(BaseModel):
-    id: str
+    id: UUID
     name: str
     hostname: Optional[str]
     description: Optional[str]
@@ -206,12 +222,16 @@ class DeviceResponse(BaseModel):
     vlans: Optional[List[VlanResponse]] = []
     ports: Optional[List[PortResponse]] = []
 
+    @field_serializer('id')
+    def serialize_id(self, v: UUID) -> str:
+        return str(v)
+
     class Config:
         from_attributes = True
 
 
 class DeviceListResponse(BaseModel):
-    id: str
+    id: UUID
     name: str
     hostname: Optional[str]
     management_ip: str
@@ -226,6 +246,10 @@ class DeviceListResponse(BaseModel):
     photo_url: Optional[str]
     tags: Optional[List[str]]
     created_at: datetime
+
+    @field_serializer('id')
+    def serialize_id(self, v: UUID) -> str:
+        return str(v)
 
     class Config:
         from_attributes = True

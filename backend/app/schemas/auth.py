@@ -4,7 +4,8 @@ Schemas Pydantic para autenticação e gerenciamento de usuários.
 """
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, validator, Field
+from uuid import UUID
+from pydantic import BaseModel, EmailStr, validator, Field, field_serializer
 import re
 
 
@@ -94,7 +95,7 @@ class UserUpdate(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: str
+    id: UUID
     username: str
     email: str
     full_name: str
@@ -107,6 +108,10 @@ class UserResponse(BaseModel):
     created_at: datetime
     avatar_url: Optional[str]
     phone: Optional[str]
+
+    @field_serializer('id')
+    def serialize_id(self, v: UUID) -> str:
+        return str(v)
 
     class Config:
         from_attributes = True
