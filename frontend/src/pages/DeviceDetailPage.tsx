@@ -4,10 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Terminal, Shield, Network, Server, Edit2, Trash2,
   Wifi, WifiOff, AlertTriangle, Settings, Upload, Plus, RefreshCw,
-  Key, Globe, Layers, GitBranch, Camera, Activity, CheckCircle
+  Key, Globe, Layers, GitBranch, Camera, Activity, CheckCircle, Eye, EyeOff
 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { devicesApi, vpnApi } from '../utils/api'
+import { devicesApi, vpnApi, routesApi } from '../utils/api'
 import { useAuthStore } from '../store/authStore'
 import VlanFormModal from '../components/devices/VlanFormModal'
 import PortFormModal from '../components/devices/PortFormModal'
@@ -97,7 +97,7 @@ export default function DeviceDetailPage() {
 
   const tabs: { id: TabType; label: string; icon: any }[] = [
     { id: 'info', label: 'Informações', icon: Server },
-    { id: 'vlans', label: `VLANs`, icon: Layers },
+    { id: 'vlans', label: 'VLANs', icon: Layers },
     { id: 'ports', label: 'Portas', icon: Network },
     { id: 'vpn', label: 'VPN L2TP', icon: Shield },
     { id: 'routes', label: 'Rotas', icon: GitBranch },
@@ -118,64 +118,47 @@ export default function DeviceDetailPage() {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-bold text-white">{device.name}</h1>
-            <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusConfig.bg} ${statusConfig.color}`}>
-              <StatusIcon className="w-3 h-3" />
+            <span className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium ${statusConfig.bg} ${statusConfig.color}`}>
+              <StatusIcon className="w-3.5 h-3.5" />
               {statusConfig.label}
             </span>
           </div>
-          <p className="text-dark-400 mt-0.5 text-sm">
-            {DEVICE_TYPE_LABELS[device.device_type] || device.device_type} &bull; {device.management_ip}
-            {device.location && ` &bull; ${device.location}`}
+          <p className="text-dark-400 text-sm mt-1">
+            {DEVICE_TYPE_LABELS[device.device_type] || device.device_type}
+            {device.management_ip && ` • ${device.management_ip}`}
+            {device.location && ` • ${device.location}`}
           </p>
         </div>
-
-        {/* Actions */}
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => handleConnect('ssh')}
-            className="btn btn-primary flex items-center gap-2"
-          >
-            <Terminal className="w-4 h-4" />
-            SSH
+          <button onClick={() => handleConnect('ssh')} className="btn btn-primary flex items-center gap-2 text-sm">
+            <Terminal className="w-4 h-4" /> SSH
           </button>
-          <button
-            onClick={() => handleConnect('telnet')}
-            className="btn btn-secondary flex items-center gap-2"
-          >
-            <Terminal className="w-4 h-4" />
-            Telnet
+          <button onClick={() => handleConnect('telnet')} className="btn btn-secondary flex items-center gap-2 text-sm">
+            <Terminal className="w-4 h-4" /> Telnet
           </button>
-          {device.device_type === 'mikrotik' && (
-            <button
-              onClick={() => window.open(`http://${device.management_ip}:${device.winbox_port || 8291}`, '_blank')}
-              className="btn btn-secondary flex items-center gap-2"
+          {device.http_port && (
+            <a
+              href={`http://${device.management_ip}:${device.http_port}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-secondary flex items-center gap-2 text-sm"
             >
-              <Globe className="w-4 h-4" />
-              Winbox
-            </button>
-          )}
-          {(device.device_type === 'vsol_olt' || device.http_port) && (
-            <button
-              onClick={() => window.open(`http://${device.management_ip}:${device.http_port || 80}`, '_blank')}
-              className="btn btn-secondary flex items-center gap-2"
-            >
-              <Globe className="w-4 h-4" />
-              Web
-            </button>
+              <Globe className="w-4 h-4" /> Web
+            </a>
           )}
           {canEdit && (
             <button
               onClick={() => navigate(`/devices/${id}/edit`)}
-              className="btn btn-secondary flex items-center gap-2"
+              className="btn btn-secondary flex items-center gap-2 text-sm"
             >
-              <Edit2 className="w-4 h-4" />
-              Editar
+              <Edit2 className="w-4 h-4" /> Editar
             </button>
           )}
           {canDelete && (
             <button
               onClick={handleDelete}
-              className="btn btn-danger flex items-center gap-2"
+              className="btn btn-danger flex items-center gap-2 text-sm"
+              disabled={deleteMutation.isPending}
             >
               <Trash2 className="w-4 h-4" />
               Remover
@@ -219,8 +202,9 @@ export default function DeviceDetailPage() {
   )
 }
 
+// ─── InfoRow helper ────────────────────────────────────────────────────────────
 function InfoRow({ label, value, mono }: { label: string; value?: string | number | null; mono?: boolean }) {
-  if (!value && value !== 0) return null
+  if (value === null || value === undefined || value === '') return null
   return (
     <div className="flex justify-between py-2.5 border-b border-dark-700/50 last:border-0">
       <span className="text-dark-400 text-sm">{label}</span>
@@ -229,9 +213,19 @@ function InfoRow({ label, value, mono }: { label: string; value?: string | numbe
   )
 }
 
+// ─── DeviceInfoTab ─────────────────────────────────────────────────────────────
 function DeviceInfoTab({ device }: { device: any }) {
+  // Protocolos habilitados para exibição
+  const protocols = []
+  if (device.ssh_port) protocols.push({ label: 'SSH', port: device.ssh_port })
+  if (device.telnet_port) protocols.push({ label: 'Telnet', port: device.telnet_port })
+  if (device.winbox_port) protocols.push({ label: 'Winbox', port: device.winbox_port })
+  if (device.http_port) protocols.push({ label: 'HTTP', port: device.http_port })
+  if (device.https_port) protocols.push({ label: 'HTTPS', port: device.https_port })
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Identificação */}
       <div className="card">
         <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-4">Identificação</h3>
         <InfoRow label="Nome" value={device.name} />
@@ -245,6 +239,7 @@ function DeviceInfoTab({ device }: { device: any }) {
         <InfoRow label="Site" value={device.site} />
       </div>
 
+      {/* Configuração de Rede — só mostra campos preenchidos */}
       <div className="card">
         <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-4">Configuração de Rede</h3>
         <InfoRow label="IP de Gerência" value={device.management_ip} mono />
@@ -254,13 +249,25 @@ function DeviceInfoTab({ device }: { device: any }) {
         <InfoRow label="DNS Secundário" value={device.dns_secondary} mono />
         <InfoRow label="IP Loopback" value={device.loopback_ip} mono />
         <InfoRow label="Protocolo Principal" value={device.primary_protocol?.toUpperCase()} />
-        <InfoRow label="Porta SSH" value={device.ssh_port} />
-        <InfoRow label="Porta Telnet" value={device.telnet_port} />
-        <InfoRow label="Porta Winbox" value={device.winbox_port} />
-        <InfoRow label="Porta HTTP" value={device.http_port} />
+
+        {/* Portas de Acesso — só mostra as que estão configuradas */}
+        {protocols.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-dark-700/50">
+            <p className="text-xs text-dark-500 uppercase tracking-wider mb-3">Portas de Acesso</p>
+            <div className="flex flex-wrap gap-3">
+              {protocols.map(p => (
+                <div key={p.label} className="flex items-center gap-1.5 bg-dark-700/60 rounded-lg px-3 py-1.5">
+                  <span className="text-xs font-medium text-brand-400">{p.label}</span>
+                  <span className="text-xs font-mono text-dark-300">{p.port}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      {(device.last_seen || device.uptime_seconds !== undefined) && (
+      {/* Monitoramento — só mostra se houver dados */}
+      {(device.last_seen || device.uptime_seconds !== undefined || device.cpu_usage !== undefined || device.memory_usage !== undefined) && (
         <div className="card">
           <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-4">Monitoramento</h3>
           {device.last_seen && (
@@ -281,6 +288,7 @@ function DeviceInfoTab({ device }: { device: any }) {
         </div>
       )}
 
+      {/* Observações */}
       {device.notes && (
         <div className="card">
           <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-4">Observações</h3>
@@ -288,6 +296,7 @@ function DeviceInfoTab({ device }: { device: any }) {
         </div>
       )}
 
+      {/* Tags */}
       {device.tags && device.tags.length > 0 && (
         <div className="card">
           <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-4">Tags</h3>
@@ -302,17 +311,41 @@ function DeviceInfoTab({ device }: { device: any }) {
   )
 }
 
+// ─── VlansTab ──────────────────────────────────────────────────────────────────
 function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
+  const [editVlan, setEditVlan] = useState<any>(null)
+
   const { data: vlans, isLoading } = useQuery({
     queryKey: ['vlans', deviceId],
     queryFn: () => devicesApi.getVlans(deviceId).then(r => r.data),
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: (vlanId: string) => devicesApi.deleteVlan(deviceId, vlanId),
+    onSuccess: () => {
+      toast.success('VLAN removida')
+      queryClient.invalidateQueries({ queryKey: ['vlans', deviceId] })
+    },
+    onError: () => toast.error('Erro ao remover VLAN'),
+  })
+
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['vlans', deviceId] })
     setShowModal(false)
+    setEditVlan(null)
+  }
+
+  const handleEdit = (vlan: any) => {
+    setEditVlan(vlan)
+    setShowModal(true)
+  }
+
+  const handleDelete = (vlan: any) => {
+    if (confirm(`Remover VLAN ${vlan.vlan_id} (${vlan.name || 'sem nome'})?`)) {
+      deleteMutation.mutate(vlan.id)
+    }
   }
 
   return (
@@ -320,7 +353,7 @@ function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-white">VLANs Configuradas</h3>
         {canEdit && (
-          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => { setEditVlan(null); setShowModal(true) }} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar VLAN
           </button>
         )}
@@ -342,7 +375,8 @@ function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
                 <th className="pb-3 pr-4">IP</th>
                 <th className="pb-3 pr-4">Gateway</th>
                 <th className="pb-3 pr-4">Status</th>
-                <th className="pb-3">Gerência</th>
+                <th className="pb-3 pr-4">Gerência</th>
+                {canEdit && <th className="pb-3 text-right">Ações</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-dark-700/50">
@@ -357,9 +391,29 @@ function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
                       {vlan.is_active ? 'Ativa' : 'Inativa'}
                     </span>
                   </td>
-                  <td className="py-3">
+                  <td className="py-3 pr-4">
                     {vlan.is_management && <span className="badge badge-info">Gerência</span>}
                   </td>
+                  {canEdit && (
+                    <td className="py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => handleEdit(vlan)}
+                          className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-brand-400 transition-colors"
+                          title="Editar"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(vlan)}
+                          className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-red-400 transition-colors"
+                          title="Remover"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -369,7 +423,8 @@ function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
       {showModal && (
         <VlanFormModal
           deviceId={deviceId}
-          onClose={() => setShowModal(false)}
+          vlan={editVlan}
+          onClose={() => { setShowModal(false); setEditVlan(null) }}
           onSuccess={handleSuccess}
         />
       )}
@@ -377,17 +432,30 @@ function VlansTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
   )
 }
 
+// ─── PortsTab ──────────────────────────────────────────────────────────────────
 function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
+  const [editPort, setEditPort] = useState<any>(null)
+
   const { data: ports, isLoading } = useQuery({
     queryKey: ['ports', deviceId],
     queryFn: () => devicesApi.getPorts(deviceId).then(r => r.data),
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: (portId: string) => devicesApi.deletePort(deviceId, portId),
+    onSuccess: () => {
+      toast.success('Porta removida')
+      queryClient.invalidateQueries({ queryKey: ['ports', deviceId] })
+    },
+    onError: () => toast.error('Erro ao remover porta'),
+  })
+
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['ports', deviceId] })
     setShowModal(false)
+    setEditPort(null)
   }
 
   return (
@@ -395,7 +463,7 @@ function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-white">Portas do Dispositivo</h3>
         {canEdit && (
-          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => { setEditPort(null); setShowModal(true) }} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar Porta
           </button>
         )}
@@ -417,7 +485,8 @@ function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
                 <th className="pb-3 pr-4">Status</th>
                 <th className="pb-3 pr-4">Velocidade</th>
                 <th className="pb-3 pr-4">VLAN</th>
-                <th className="pb-3">Conectado em</th>
+                <th className="pb-3 pr-4">Conectado em</th>
+                {canEdit && <th className="pb-3 text-right">Ações</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-dark-700/50">
@@ -435,7 +504,29 @@ function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
                   </td>
                   <td className="py-3 pr-4 text-dark-300">{port.speed_mbps ? `${port.speed_mbps} Mbps` : '—'}</td>
                   <td className="py-3 pr-4 font-mono text-dark-300">{port.vlan_id || '—'}</td>
-                  <td className="py-3 text-dark-400">{port.connected_device || '—'}</td>
+                  <td className="py-3 pr-4 text-dark-400">{port.connected_device || '—'}</td>
+                  {canEdit && (
+                    <td className="py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => { setEditPort(port); setShowModal(true) }}
+                          className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-brand-400 transition-colors"
+                          title="Editar"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Remover porta ${port.port_name}?`)) deleteMutation.mutate(port.id)
+                          }}
+                          className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-red-400 transition-colors"
+                          title="Remover"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -445,7 +536,8 @@ function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
       {showModal && (
         <PortFormModal
           deviceId={deviceId}
-          onClose={() => setShowModal(false)}
+          port={editPort}
+          onClose={() => { setShowModal(false); setEditPort(null) }}
           onSuccess={handleSuccess}
         />
       )}
@@ -453,25 +545,41 @@ function PortsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean })
   )
 }
 
+// ─── VpnTab ────────────────────────────────────────────────────────────────────
 function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
+  const [editVpn, setEditVpn] = useState<any>(null)
+
   const { data: vpnConfigs, isLoading } = useQuery({
     queryKey: ['vpn', deviceId],
     queryFn: () => vpnApi.list(deviceId).then(r => r.data),
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: (vpnId: string) => vpnApi.delete(deviceId, vpnId),
+    onSuccess: () => {
+      toast.success('VPN removida')
+      queryClient.invalidateQueries({ queryKey: ['vpn', deviceId] })
+    },
+    onError: () => toast.error('Erro ao remover VPN'),
+  })
+
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['vpn', deviceId] })
     setShowModal(false)
+    setEditVpn(null)
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-white">Configurações VPN L2TP</h3>
+        <div>
+          <h3 className="font-semibold text-white">Configurações VPN L2TP</h3>
+          <p className="text-xs text-dark-500 mt-0.5">Clientes L2TP que se conectam ao servidor VPN</p>
+        </div>
         {canEdit && (
-          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => { setEditVpn(null); setShowModal(true) }} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Nova VPN
           </button>
         )}
@@ -482,6 +590,7 @@ function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
         <div className="card text-center py-10 text-dark-500">
           <Shield className="w-10 h-10 mx-auto mb-2 opacity-30" />
           <p>Nenhuma VPN configurada</p>
+          <p className="text-xs mt-1">Adicione uma conexão L2TP para este dispositivo</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -492,11 +601,31 @@ function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
                   <div className="flex items-center gap-2">
                     <h4 className="font-medium text-white">{vpn.name}</h4>
                     <span className={`badge ${vpn.status === 'active' ? 'badge-success' : 'badge-danger'}`}>
-                      {vpn.status}
+                      {vpn.status === 'active' ? 'Ativo' : vpn.status}
                     </span>
                   </div>
                   <p className="text-sm text-dark-400 mt-1">{vpn.description || 'VPN L2TP'}</p>
                 </div>
+                {canEdit && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => { setEditVpn(vpn); setShowModal(true) }}
+                      className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-brand-400 transition-colors"
+                      title="Editar VPN"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Remover VPN "${vpn.name}"?`)) deleteMutation.mutate(vpn.id)
+                      }}
+                      className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-red-400 transition-colors"
+                      title="Remover VPN"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4 border-t border-dark-700">
                 <div>
@@ -518,7 +647,7 @@ function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
               </div>
               {vpn.static_routes && vpn.static_routes.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-dark-700">
-                  <p className="text-xs text-dark-500 mb-2">Rotas Estáticas ({vpn.static_routes.length})</p>
+                  <p className="text-xs text-dark-500 mb-2">Rotas via esta VPN ({vpn.static_routes.length})</p>
                   <div className="flex flex-wrap gap-2">
                     {vpn.static_routes.map((route: any) => (
                       <span key={route.id} className="text-xs font-mono bg-dark-700 px-2 py-1 rounded">
@@ -535,7 +664,8 @@ function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
       {showModal && (
         <VpnFormModal
           deviceId={deviceId}
-          onClose={() => setShowModal(false)}
+          vpn={editVpn}
+          onClose={() => { setShowModal(false); setEditVpn(null) }}
           onSuccess={handleSuccess}
         />
       )}
@@ -543,27 +673,52 @@ function VpnTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
   )
 }
 
+// ─── RoutesTab ─────────────────────────────────────────────────────────────────
 function RoutesTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
+  const [editRoute, setEditRoute] = useState<any>(null)
+
   const { data: routes, isLoading } = useQuery({
     queryKey: ['routes', deviceId],
-    queryFn: () => fetch(`/api/v1/devices/${deviceId}/routes`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` }
-    }).then(r => r.json()),
+    queryFn: () => routesApi.list(deviceId).then(r => r.data),
+  })
+
+  const { data: vpnConfigs } = useQuery({
+    queryKey: ['vpn', deviceId],
+    queryFn: () => vpnApi.list(deviceId).then(r => r.data),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (routeId: string) => routesApi.delete(deviceId, routeId),
+    onSuccess: () => {
+      toast.success('Rota removida')
+      queryClient.invalidateQueries({ queryKey: ['routes', deviceId] })
+    },
+    onError: () => toast.error('Erro ao remover rota'),
   })
 
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['routes', deviceId] })
     setShowModal(false)
+    setEditRoute(null)
+  }
+
+  // Mapa de VPN id → nome para exibição
+  const vpnMap: Record<string, string> = {}
+  if (vpnConfigs) {
+    vpnConfigs.forEach((v: any) => { vpnMap[v.id] = v.name })
   }
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-white">Rotas Estáticas</h3>
+        <div>
+          <h3 className="font-semibold text-white">Rotas Estáticas</h3>
+          <p className="text-xs text-dark-500 mt-0.5">Rotas podem ser vinculadas a uma interface VPN L2TP</p>
+        </div>
         {canEdit && (
-          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => { setEditRoute(null); setShowModal(true) }} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar Rota
           </button>
         )}
@@ -582,9 +737,10 @@ function RoutesTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
               <tr className="border-b border-dark-700 text-left text-xs text-dark-400 uppercase tracking-wider">
                 <th className="pb-3 pr-4">Destino</th>
                 <th className="pb-3 pr-4">Próximo Salto</th>
-                <th className="pb-3 pr-4">Interface</th>
+                <th className="pb-3 pr-4">Interface / VPN</th>
                 <th className="pb-3 pr-4">Métrica</th>
-                <th className="pb-3">Status</th>
+                <th className="pb-3 pr-4">Status</th>
+                {canEdit && <th className="pb-3 text-right">Ações</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-dark-700/50">
@@ -592,13 +748,44 @@ function RoutesTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
                 <tr key={route.id} className="hover:bg-dark-700/30 transition-colors">
                   <td className="py-3 pr-4 font-mono text-brand-400">{route.destination_network}</td>
                   <td className="py-3 pr-4 font-mono text-green-400">{route.next_hop}</td>
-                  <td className="py-3 pr-4 font-mono text-dark-300">{route.interface || '—'}</td>
+                  <td className="py-3 pr-4">
+                    {route.vpn_config_id ? (
+                      <span className="flex items-center gap-1.5">
+                        <Shield className="w-3 h-3 text-brand-400" />
+                        <span className="text-brand-400 text-xs font-medium">{vpnMap[route.vpn_config_id] || 'VPN'}</span>
+                      </span>
+                    ) : (
+                      <span className="font-mono text-dark-300">{route.interface || '—'}</span>
+                    )}
+                  </td>
                   <td className="py-3 pr-4 text-dark-300">{route.metric}</td>
-                  <td className="py-3">
+                  <td className="py-3 pr-4">
                     <span className={`badge ${route.is_active ? 'badge-success' : 'badge-danger'}`}>
                       {route.is_active ? 'Ativa' : 'Inativa'}
                     </span>
                   </td>
+                  {canEdit && (
+                    <td className="py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => { setEditRoute(route); setShowModal(true) }}
+                          className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-brand-400 transition-colors"
+                          title="Editar"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Remover rota ${route.destination_network}?`)) deleteMutation.mutate(route.id)
+                          }}
+                          className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-red-400 transition-colors"
+                          title="Remover"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -608,7 +795,9 @@ function RoutesTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
       {showModal && (
         <RouteFormModal
           deviceId={deviceId}
-          onClose={() => setShowModal(false)}
+          route={editRoute}
+          vpnConfigs={vpnConfigs || []}
+          onClose={() => { setShowModal(false); setEditRoute(null) }}
           onSuccess={handleSuccess}
         />
       )}
@@ -616,11 +805,23 @@ function RoutesTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
   )
 }
 
+// ─── PhotosTab ─────────────────────────────────────────────────────────────────
 function PhotosTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
   const queryClient = useQueryClient()
+  const [lightbox, setLightbox] = useState<string | null>(null)
+
   const { data: photos, isLoading } = useQuery({
     queryKey: ['photos', deviceId],
     queryFn: () => devicesApi.getPhotos(deviceId).then(r => r.data),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (photoId: string) => devicesApi.deletePhoto(deviceId, photoId),
+    onSuccess: () => {
+      toast.success('Foto removida')
+      queryClient.invalidateQueries({ queryKey: ['photos', deviceId] })
+    },
+    onError: () => toast.error('Erro ao remover foto'),
   })
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -633,6 +834,7 @@ function PhotosTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
     } catch {
       toast.error('Erro ao enviar foto')
     }
+    e.target.value = ''
   }
 
   return (
@@ -659,29 +861,83 @@ function PhotosTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {photos.map((photo: any) => (
             <div key={photo.id} className="relative group aspect-square bg-dark-700 rounded-lg overflow-hidden">
-              <img src={photo.url} alt={photo.original_filename} className="w-full h-full object-cover" />
+              <img
+                src={photo.url}
+                alt={photo.original_filename}
+                className="w-full h-full object-cover cursor-pointer"
+                onClick={() => setLightbox(photo.url)}
+              />
               {photo.is_primary && (
                 <span className="absolute top-2 left-2 badge badge-success text-xs">Principal</span>
               )}
+              {canEdit && (
+                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => {
+                      if (confirm('Remover esta foto?')) deleteMutation.mutate(photo.id)
+                    }}
+                    className="p-1.5 bg-red-500/90 hover:bg-red-500 rounded-lg text-white transition-colors"
+                    title="Remover foto"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <img src={lightbox} alt="Foto ampliada" className="max-w-full max-h-full rounded-lg shadow-2xl" />
         </div>
       )}
     </div>
   )
 }
 
+// ─── CredentialsTab ────────────────────────────────────────────────────────────
 function CredentialsTab({ deviceId, canEdit }: { deviceId: string; canEdit: boolean }) {
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
+  const [editCred, setEditCred] = useState<any>(null)
+  const [showPassword, setShowPassword] = useState<Record<string, boolean>>({})
+
   const { data: credentials, isLoading } = useQuery({
     queryKey: ['credentials', deviceId],
     queryFn: () => devicesApi.getCredentials(deviceId).then(r => r.data),
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: (credId: string) => devicesApi.deleteCredential(deviceId, credId),
+    onSuccess: () => {
+      toast.success('Credencial removida')
+      queryClient.invalidateQueries({ queryKey: ['credentials', deviceId] })
+    },
+    onError: () => toast.error('Erro ao remover credencial'),
+  })
+
   const handleSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ['credentials', deviceId] })
     setShowModal(false)
+    setEditCred(null)
+  }
+
+  const togglePassword = (id: string) => {
+    setShowPassword(prev => ({ ...prev, [id]: !prev[id] }))
+  }
+
+  const CRED_TYPE_COLORS: Record<string, string> = {
+    ssh: 'badge-success',
+    telnet: 'badge-warning',
+    snmp: 'badge-info',
+    web: 'badge-info',
+    api: 'badge-danger',
   }
 
   return (
@@ -689,7 +945,7 @@ function CredentialsTab({ deviceId, canEdit }: { deviceId: string; canEdit: bool
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-white">Credenciais de Acesso</h3>
         {canEdit && (
-          <button onClick={() => setShowModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => { setEditCred(null); setShowModal(true) }} className="btn btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> Adicionar
           </button>
         )}
@@ -705,14 +961,40 @@ function CredentialsTab({ deviceId, canEdit }: { deviceId: string; canEdit: bool
         <div className="space-y-2">
           {credentials.map((cred: any) => (
             <div key={cred.id} className="flex items-center justify-between p-3 bg-dark-700/50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <span className="badge badge-info">{cred.credential_type?.toUpperCase()}</span>
-                <span className="text-dark-300 text-sm">{cred.username || 'Sem usuário'}</span>
-                {cred.description && <span className="text-dark-500 text-xs">{cred.description}</span>}
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <span className={`badge ${CRED_TYPE_COLORS[cred.credential_type] || 'badge-info'} shrink-0`}>
+                  {cred.credential_type?.toUpperCase()}
+                </span>
+                <span className="text-dark-300 text-sm truncate">{cred.username || 'Sem usuário'}</span>
+                {cred.description && <span className="text-dark-500 text-xs truncate hidden sm:block">{cred.description}</span>}
               </div>
-              <span className={`text-xs ${cred.is_active ? 'text-green-400' : 'text-red-400'}`}>
-                {cred.is_active ? 'Ativo' : 'Inativo'}
-              </span>
+              <div className="flex items-center gap-2 shrink-0 ml-2">
+                <span className={`text-xs ${cred.is_active ? 'text-green-400' : 'text-red-400'}`}>
+                  {cred.is_active ? 'Ativo' : 'Inativo'}
+                </span>
+                {canEdit && (
+                  <>
+                    <button
+                      onClick={() => { setEditCred(cred); setShowModal(true) }}
+                      className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-brand-400 transition-colors"
+                      title="Editar"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Remover credencial ${cred.credential_type?.toUpperCase()} de "${cred.username}"?`)) {
+                          deleteMutation.mutate(cred.id)
+                        }
+                      }}
+                      className="p-1.5 rounded hover:bg-dark-600 text-dark-400 hover:text-red-400 transition-colors"
+                      title="Remover"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -720,7 +1002,8 @@ function CredentialsTab({ deviceId, canEdit }: { deviceId: string; canEdit: bool
       {showModal && (
         <CredentialFormModal
           deviceId={deviceId}
-          onClose={() => setShowModal(false)}
+          credential={editCred}
+          onClose={() => { setShowModal(false); setEditCred(null) }}
           onSuccess={handleSuccess}
         />
       )}

@@ -1,33 +1,46 @@
 import { useForm } from 'react-hook-form'
 import { useMutation } from '@tanstack/react-query'
-import { X, GitBranch, Loader2 } from 'lucide-react'
+import { X, GitBranch, Loader2, Shield } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { routesApi } from '../../utils/api'
 
 interface Props {
   deviceId: string
   route?: any
+  vpnConfigs?: any[]
   onClose: () => void
   onSuccess: () => void
 }
 
-export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: Props) {
+export default function RouteFormModal({ deviceId, route, vpnConfigs = [], onClose, onSuccess }: Props) {
   const isEdit = !!route
-  const { register, handleSubmit, formState: { errors } } = useForm({
+  const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm({
     defaultValues: route || {
       destination_network: '',
       next_hop: '',
       interface: '',
+      vpn_config_id: '',
       metric: 1,
+      description: '',
       is_active: true,
     },
   })
 
+  const selectedVpn = watch('vpn_config_id')
+
   const mutation = useMutation({
-    mutationFn: (data: any) =>
-      isEdit
-        ? routesApi.update(deviceId, route.id, data)
-        : routesApi.create(deviceId, data),
+    mutationFn: (data: any) => {
+      // Se selecionou VPN, limpa o campo interface
+      const payload = { ...data }
+      if (payload.vpn_config_id) {
+        payload.interface = ''
+      } else {
+        payload.vpn_config_id = null
+      }
+      return isEdit
+        ? routesApi.update(deviceId, route.id, payload)
+        : routesApi.create(deviceId, payload)
+    },
     onSuccess: () => {
       toast.success(isEdit ? 'Rota atualizada!' : 'Rota criada!')
       onSuccess()
@@ -58,7 +71,7 @@ export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: 
               placeholder="192.168.10.0/24"
             />
             {errors.destination_network && (
-              <p className="text-red-400 text-xs mt-1">{errors.destination_network.message}</p>
+              <p className="text-red-400 text-xs mt-1">{String(errors.destination_network.message)}</p>
             )}
           </div>
 
@@ -69,18 +82,56 @@ export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: 
               className="input"
               placeholder="192.168.1.1"
             />
-            {errors.next_hop && <p className="text-red-400 text-xs mt-1">{errors.next_hop.message}</p>}
+            {errors.next_hop && <p className="text-red-400 text-xs mt-1">{String(errors.next_hop.message)}</p>}
+          </div>
+
+          {/* Interface VPN ou física */}
+          <div className="space-y-3 p-4 bg-dark-700/40 rounded-xl border border-dark-600">
+            <p className="text-xs font-medium text-dark-400 uppercase tracking-wider">Interface de Saída</p>
+
+            {vpnConfigs.length > 0 && (
+              <div>
+                <label className="label flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-brand-400" />
+                  Interface VPN L2TP
+                </label>
+                <select
+                  {...register('vpn_config_id')}
+                  className="input"
+                  onChange={e => {
+                    setValue('vpn_config_id', e.target.value)
+                    if (e.target.value) setValue('interface', '')
+                  }}
+                >
+                  <option value="">— Não usar VPN —</option>
+                  {vpnConfigs.map((vpn: any) => (
+                    <option key={vpn.id} value={vpn.id}>
+                      {vpn.name} ({vpn.server_ip})
+                    </option>
+                  ))}
+                </select>
+                {selectedVpn && (
+                  <p className="text-xs text-brand-400 mt-1 flex items-center gap-1">
+                    <Shield className="w-3 h-3" />
+                    Rota será roteada via interface VPN selecionada
+                  </p>
+                )}
+              </div>
+            )}
+
+            {!selectedVpn && (
+              <div>
+                <label className="label">Interface Física</label>
+                <input
+                  {...register('interface')}
+                  className="input"
+                  placeholder="GigabitEthernet0/0/1"
+                />
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Interface</label>
-              <input
-                {...register('interface')}
-                className="input"
-                placeholder="GigabitEthernet0/0/1"
-              />
-            </div>
             <div>
               <label className="label">Métrica</label>
               <input
@@ -88,6 +139,14 @@ export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: 
                 {...register('metric', { min: 1 })}
                 className="input"
                 placeholder="1"
+              />
+            </div>
+            <div>
+              <label className="label">Descrição</label>
+              <input
+                {...register('description')}
+                className="input"
+                placeholder="Rota para filial..."
               />
             </div>
           </div>
@@ -101,14 +160,11 @@ export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: 
             <button type="button" onClick={onClose} className="btn btn-secondary flex-1">
               Cancelar
             </button>
-            <button type="submit" disabled={mutation.isPending} className="btn btn-primary flex-1">
+            <button type="submit" disabled={mutation.isPending} className="btn btn-primary flex-1 flex items-center justify-center gap-2">
               {mutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Salvando...
-                </>
+                <><Loader2 className="w-4 h-4 animate-spin" /> Salvando...</>
               ) : (
-                'Salvar'
+                isEdit ? 'Atualizar' : 'Criar Rota'
               )}
             </button>
           </div>

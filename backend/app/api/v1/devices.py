@@ -660,18 +660,29 @@ async def check_devices_status(
     tasks = [check_device(device) for device in devices]
     statuses = await asyncio.gather(*tasks)
     
-    # Atualiza o status no banco
+    # Atualiza o status no banco e registra mudanças
     updated_count = 0
+    changes = []
     for device, new_status in zip(devices, statuses):
         if device.status != new_status:
+            old_status = device.status
             device.status = new_status
             updated_count += 1
+            changes.append({
+                "id": str(device.id),
+                "name": device.name,
+                "ip": device.management_ip,
+                "old_status": old_status.value,
+                "new_status": new_status.value,
+            })
     
     await db.commit()
     
     return {
         "message": f"Status verificado para {len(devices)} dispositivos",
+        "checked": len(devices),
         "updated": updated_count,
+        "changes": changes,
         "devices": [
             {"id": str(device.id), "name": device.name, "ip": device.management_ip, "status": device.status.value}
             for device in devices

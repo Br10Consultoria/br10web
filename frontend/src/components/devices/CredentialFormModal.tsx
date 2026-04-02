@@ -7,14 +7,16 @@ import { devicesApi } from '../../utils/api'
 
 interface Props {
   deviceId: string
+  credential?: any
   onClose: () => void
   onSuccess: () => void
 }
 
-export default function CredentialFormModal({ deviceId, onClose, onSuccess }: Props) {
+export default function CredentialFormModal({ deviceId, credential, onClose, onSuccess }: Props) {
+  const isEdit = !!credential
   const [showPassword, setShowPassword] = useState(false)
   const { register, handleSubmit, formState: { errors } } = useForm({
-    defaultValues: {
+    defaultValues: credential || {
       credential_type: 'ssh',
       username: '',
       password: '',
@@ -25,9 +27,12 @@ export default function CredentialFormModal({ deviceId, onClose, onSuccess }: Pr
   })
 
   const mutation = useMutation({
-    mutationFn: (data: any) => devicesApi.createCredential(deviceId, data),
+    mutationFn: (data: any) =>
+      isEdit
+        ? devicesApi.createCredential(deviceId, { ...data, id: credential.id })
+        : devicesApi.createCredential(deviceId, data),
     onSuccess: () => {
-      toast.success('Credencial adicionada!')
+      toast.success(isEdit ? 'Credencial atualizada!' : 'Credencial adicionada!')
       onSuccess()
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Erro ao salvar credencial'),
@@ -40,7 +45,7 @@ export default function CredentialFormModal({ deviceId, onClose, onSuccess }: Pr
         <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700 sticky top-0 bg-dark-800">
           <div className="flex items-center gap-3">
             <Key className="w-5 h-5 text-yellow-400" />
-            <h2 className="font-semibold text-white">Nova Credencial</h2>
+            <h2 className="font-semibold text-white">{isEdit ? 'Editar Credencial' : 'Nova Credencial'}</h2>
           </div>
           <button onClick={onClose} className="btn-ghost p-1.5 rounded-lg">
             <X className="w-4 h-4" />
@@ -66,17 +71,17 @@ export default function CredentialFormModal({ deviceId, onClose, onSuccess }: Pr
               className="input"
               placeholder="admin"
             />
-            {errors.username && <p className="text-red-400 text-xs mt-1">{errors.username.message}</p>}
+            {errors.username && <p className="text-red-400 text-xs mt-1">{String(errors.username.message)}</p>}
           </div>
 
           <div>
-            <label className="label">Senha</label>
+            <label className="label">{isEdit ? 'Nova Senha (deixe em branco para manter)' : 'Senha'}</label>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
                 {...register('password')}
                 className="input pr-10"
-                placeholder="••••••••"
+                placeholder={isEdit ? '••••••••' : '••••••••'}
               />
               <button
                 type="button"
@@ -116,14 +121,11 @@ export default function CredentialFormModal({ deviceId, onClose, onSuccess }: Pr
             <button type="button" onClick={onClose} className="btn btn-secondary flex-1">
               Cancelar
             </button>
-            <button type="submit" disabled={mutation.isPending} className="btn btn-primary flex-1">
+            <button type="submit" disabled={mutation.isPending} className="btn btn-primary flex-1 flex items-center justify-center gap-2">
               {mutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Salvando...
-                </>
+                <><Loader2 className="w-4 h-4 animate-spin" /> Salvando...</>
               ) : (
-                'Salvar'
+                isEdit ? 'Atualizar' : 'Adicionar'
               )}
             </button>
           </div>
