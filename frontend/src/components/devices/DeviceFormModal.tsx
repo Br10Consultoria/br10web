@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react'
-import { useForm } from 'react-hook-form'
+import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { X, Server, Eye, EyeOff, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -20,30 +19,12 @@ const DEVICE_TYPES = [
 ]
 
 const PROTOCOLS = [
-  { value: 'ssh', label: 'SSH' },
-  { value: 'telnet', label: 'Telnet' },
-  { value: 'winbox', label: 'Winbox' },
-  { value: 'http', label: 'HTTP' },
-  { value: 'https', label: 'HTTPS' },
+  { value: 'ssh', label: 'SSH', defaultPort: 22, field: 'ssh_port' },
+  { value: 'telnet', label: 'Telnet', defaultPort: 23, field: 'telnet_port' },
+  { value: 'winbox', label: 'Winbox', defaultPort: 8291, field: 'winbox_port' },
+  { value: 'http', label: 'HTTP', defaultPort: 80, field: 'http_port' },
+  { value: 'https', label: 'HTTPS', defaultPort: 443, field: 'https_port' },
 ]
-
-// Portas padrão por protocolo
-const DEFAULT_PORTS: Record<string, number> = {
-  ssh: 22,
-  telnet: 23,
-  winbox: 8291,
-  http: 80,
-  https: 443,
-}
-
-// Mapeamento de protocolo para campo no backend
-const PROTOCOL_FIELD: Record<string, string> = {
-  ssh: 'ssh_port',
-  telnet: 'telnet_port',
-  winbox: 'winbox_port',
-  http: 'http_port',
-  https: 'https_port',
-}
 
 interface Props {
   device?: any
@@ -52,109 +33,155 @@ interface Props {
 }
 
 export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
-  const [showPassword, setShowPassword] = useState(false)
-  const [showAdvanced, setShowAdvanced] = useState(false)
   const isEdit = !!device
 
-  // Inicializar protocolos habilitados com base no dispositivo existente
-  const initEnabledProtocols = (): Record<string, boolean> => {
-    if (!device) {
-      // Novo dispositivo: SSH habilitado por padrão
-      return { ssh: true, telnet: false, winbox: false, http: false, https: false }
-    }
+  // ── Campos de identificação ────────────────────────────────────────────────
+  const [name, setName] = useState(device?.name || '')
+  const [hostname, setHostname] = useState(device?.hostname || '')
+  const [description, setDescription] = useState(device?.description || '')
+  const [location, setLocation] = useState(device?.location || '')
+  const [site, setSite] = useState(device?.site || '')
+  const [deviceType, setDeviceType] = useState(device?.device_type || '')
+  const [manufacturer, setManufacturer] = useState(device?.manufacturer || '')
+  const [model, setModel] = useState(device?.model || '')
+  const [firmwareVersion, setFirmwareVersion] = useState(device?.firmware_version || '')
+  const [serialNumber, setSerialNumber] = useState(device?.serial_number || '')
+  const [notes, setNotes] = useState(device?.notes || '')
+
+  // ── Campos de rede ─────────────────────────────────────────────────────────
+  const [managementIp, setManagementIp] = useState(device?.management_ip || '')
+  const [subnetMask, setSubnetMask] = useState(device?.subnet_mask || '')
+  const [gateway, setGateway] = useState(device?.gateway || '')
+  const [dnsPrimary, setDnsPrimary] = useState(device?.dns_primary || '')
+  const [dnsSecondary, setDnsSecondary] = useState(device?.dns_secondary || '')
+  const [loopbackIp, setLoopbackIp] = useState(device?.loopback_ip || '')
+
+  // ── Credenciais ────────────────────────────────────────────────────────────
+  const [username, setUsername] = useState(device?.username || '')
+  const [password, setPassword] = useState('')
+  const [enablePassword, setEnablePassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+
+  // ── Protocolos e portas ────────────────────────────────────────────────────
+  const initEnabled = () => {
+    if (!device) return { ssh: true, telnet: false, winbox: false, http: false, https: false }
     return {
-      ssh: !!device.ssh_port,
-      telnet: !!device.telnet_port,
+      ssh: device.ssh_port != null && device.ssh_port > 0,
+      telnet: device.telnet_port != null && device.telnet_port > 0,
       winbox: !!device.winbox_port,
       http: !!device.http_port,
       https: !!device.https_port,
     }
   }
-
-  // Inicializar portas com base no dispositivo existente
-  const initPorts = (): Record<string, number> => {
-    if (!device) return { ...DEFAULT_PORTS }
-    return {
-      ssh: device.ssh_port || DEFAULT_PORTS.ssh,
-      telnet: device.telnet_port || DEFAULT_PORTS.telnet,
-      winbox: device.winbox_port || DEFAULT_PORTS.winbox,
-      http: device.http_port || DEFAULT_PORTS.http,
-      https: device.https_port || DEFAULT_PORTS.https,
-    }
-  }
-
-  const [enabledProtocols, setEnabledProtocols] = useState<Record<string, boolean>>(initEnabledProtocols)
-  const [ports, setPorts] = useState<Record<string, number>>(initPorts)
-
-  const toggleProtocol = (proto: string) => {
-    setEnabledProtocols(prev => ({ ...prev, [proto]: !prev[proto] }))
-  }
-
-  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm({
-    defaultValues: device ? {
-      name: device.name,
-      hostname: device.hostname || '',
-      description: device.description || '',
-      location: device.location || '',
-      site: device.site || '',
-      device_type: device.device_type,
-      manufacturer: device.manufacturer || '',
-      model: device.model || '',
-      firmware_version: device.firmware_version || '',
-      serial_number: device.serial_number || '',
-      management_ip: device.management_ip,
-      primary_protocol: device.primary_protocol || 'ssh',
-      username: device.username || '',
-      password: '',
-      enable_password: '',
-      subnet_mask: device.subnet_mask || '',
-      gateway: device.gateway || '',
-      dns_primary: device.dns_primary || '',
-      dns_secondary: device.dns_secondary || '',
-      loopback_ip: device.loopback_ip || '',
-      notes: device.notes || '',
-    } : {
-      primary_protocol: 'ssh',
-    },
+  const initPorts = () => ({
+    ssh: device?.ssh_port || 22,
+    telnet: device?.telnet_port || 23,
+    winbox: device?.winbox_port || 8291,
+    http: device?.http_port || 80,
+    https: device?.https_port || 443,
   })
 
-  const currentPrimaryProtocol = watch('primary_protocol')
+  const [enabledProtocols, setEnabledProtocols] = useState<Record<string, boolean>>(initEnabled)
+  const [ports, setPorts] = useState<Record<string, number>>(initPorts)
 
-  // Quando o protocolo principal selecionado é desabilitado, trocar para o primeiro habilitado
-  useEffect(() => {
-    if (currentPrimaryProtocol && !enabledProtocols[currentPrimaryProtocol]) {
-      const firstEnabled = PROTOCOLS.find(p => enabledProtocols[p.value])
-      if (firstEnabled) {
-        setValue('primary_protocol', firstEnabled.value)
+  // primary_protocol: controlado por useState, não por react-hook-form
+  const [primaryProtocol, setPrimaryProtocol] = useState<string>(device?.primary_protocol || 'ssh')
+
+  const toggleProtocol = (proto: string) => {
+    setEnabledProtocols(prev => {
+      const next = { ...prev, [proto]: !prev[proto] }
+      // Se o protocolo principal foi desabilitado, trocar para o primeiro habilitado
+      if (!next[primaryProtocol]) {
+        const first = PROTOCOLS.find(p => next[p.value])
+        if (first) setPrimaryProtocol(first.value)
       }
-    }
-  }, [enabledProtocols, currentPrimaryProtocol])
+      return next
+    })
+  }
 
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // ── Validação ──────────────────────────────────────────────────────────────
+  const validate = () => {
+    const errs: Record<string, string> = {}
+    if (!name.trim()) errs.name = 'Campo obrigatório'
+    if (!managementIp.trim()) errs.managementIp = 'Campo obrigatório'
+    if (!isEdit && !deviceType) errs.deviceType = 'Campo obrigatório'
+    setErrors(errs)
+    return Object.keys(errs).length === 0
+  }
+
+  // ── Mutation ───────────────────────────────────────────────────────────────
   const mutation = useMutation({
-    mutationFn: (data: any) => {
-      // Adicionar portas habilitadas ao payload
-      const portData: Record<string, number | null> = {}
-      for (const proto of Object.keys(enabledProtocols)) {
-        const field = PROTOCOL_FIELD[proto]
-        portData[field] = enabledProtocols[proto] ? ports[proto] : null
-      }
-      return isEdit
-        ? devicesApi.update(device.id, { ...data, ...portData })
-        : devicesApi.create({ ...data, ...portData })
-    },
+    mutationFn: (payload: any) =>
+      isEdit ? devicesApi.update(device.id, payload) : devicesApi.create(payload),
     onSuccess: () => {
       toast.success(isEdit ? 'Dispositivo atualizado!' : 'Dispositivo cadastrado!')
       onSuccess()
     },
     onError: (err: any) => {
-      toast.error(err.response?.data?.detail || 'Erro ao salvar dispositivo')
+      const detail = err.response?.data?.detail
+      if (Array.isArray(detail)) {
+        toast.error(detail.map((d: any) => d.msg).join(', '))
+      } else {
+        toast.error(detail || 'Erro ao salvar dispositivo')
+      }
     },
   })
 
+  const handleSave = () => {
+    if (!validate()) return
+
+    // Montar portas
+    const portData: Record<string, number | null> = {}
+    for (const p of PROTOCOLS) {
+      portData[p.field] = enabledProtocols[p.value] ? (ports[p.value] || p.defaultPort) : null
+    }
+    // ssh_port e telnet_port são NOT NULL no banco — garantir valor mínimo
+    if (!portData.ssh_port) portData.ssh_port = 22
+    if (!portData.telnet_port) portData.telnet_port = 23
+
+    const payload: Record<string, any> = {
+      name: name.trim(),
+      hostname: hostname.trim() || null,
+      description: description.trim() || null,
+      location: location.trim() || null,
+      site: site.trim() || null,
+      device_type: deviceType || undefined,
+      manufacturer: manufacturer.trim() || null,
+      model: model.trim() || null,
+      firmware_version: firmwareVersion.trim() || null,
+      serial_number: serialNumber.trim() || null,
+      management_ip: managementIp.trim(),
+      primary_protocol: primaryProtocol,
+      username: username.trim() || null,
+      subnet_mask: subnetMask.trim() || null,
+      gateway: gateway.trim() || null,
+      dns_primary: dnsPrimary.trim() || null,
+      dns_secondary: dnsSecondary.trim() || null,
+      loopback_ip: loopbackIp.trim() || null,
+      notes: notes.trim() || null,
+      ...portData,
+    }
+
+    // Só incluir senha se preenchida
+    if (password) payload.password = password
+    if (enablePassword) payload.enable_password = enablePassword
+
+    mutation.mutate(payload)
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={e => e.stopPropagation()}
+    >
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-dark-800 border border-dark-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+      <div
+        className="relative bg-dark-800 border border-dark-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700 sticky top-0 bg-dark-800 z-10">
           <div className="flex items-center gap-3">
@@ -170,93 +197,97 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
           </button>
         </div>
 
-        <form
-          onSubmit={e => {
-            e.preventDefault()
-            e.stopPropagation()
-            handleSubmit(d => mutation.mutate(d))(e)
-          }}
-          className="p-6 space-y-6"
-        >
+        {/* Conteúdo — NÃO é um <form>, usa botão com onClick para evitar submit nativo */}
+        <div className="p-6 space-y-6">
+
           {/* Identificação */}
           <div>
-            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">
-              Identificação
-            </h3>
+            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">Identificação</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="sm:col-span-2">
                 <label className="label">Nome *</label>
-                <input {...register('name', { required: true })} className="input" placeholder="Ex: Core Router SP01" />
-                {errors.name && <p className="text-red-400 text-xs mt-1">Campo obrigatório</p>}
+                <input
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  className="input"
+                  placeholder="Ex: Core Router SP01"
+                />
+                {errors.name && <p className="text-red-400 text-xs mt-1">{errors.name}</p>}
               </div>
               <div>
                 <label className="label">Hostname</label>
-                <input {...register('hostname')} className="input" placeholder="router-sp01.br10.net" />
+                <input value={hostname} onChange={e => setHostname(e.target.value)} className="input" placeholder="router-sp01.br10.net" />
               </div>
               <div>
                 <label className="label">Tipo de Dispositivo {!isEdit && '*'}</label>
-                <select {...register('device_type', { required: !isEdit })} className="input">
+                <select value={deviceType} onChange={e => setDeviceType(e.target.value)} className="input">
                   <option value="">Selecione...</option>
-                  {DEVICE_TYPES.map(t => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
-                  ))}
+                  {DEVICE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
-                {errors.device_type && <p className="text-red-400 text-xs mt-1">Campo obrigatório</p>}
+                {errors.deviceType && <p className="text-red-400 text-xs mt-1">{errors.deviceType}</p>}
               </div>
               <div>
                 <label className="label">Fabricante</label>
-                <input {...register('manufacturer')} className="input" placeholder="Huawei" />
+                <input value={manufacturer} onChange={e => setManufacturer(e.target.value)} className="input" placeholder="Huawei" />
               </div>
               <div>
                 <label className="label">Modelo</label>
-                <input {...register('model')} className="input" placeholder="NE8000-M8" />
+                <input value={model} onChange={e => setModel(e.target.value)} className="input" placeholder="NE8000-M8" />
               </div>
               <div>
                 <label className="label">Local / Rack</label>
-                <input {...register('location')} className="input" placeholder="DC São Paulo - Rack A3" />
+                <input value={location} onChange={e => setLocation(e.target.value)} className="input" placeholder="DC São Paulo - Rack A3" />
               </div>
               <div>
                 <label className="label">Site / Cliente</label>
-                <input {...register('site')} className="input" placeholder="Cliente ABC" />
+                <input value={site} onChange={e => setSite(e.target.value)} className="input" placeholder="Cliente ABC" />
               </div>
               <div className="sm:col-span-2">
                 <label className="label">Descrição</label>
-                <textarea {...register('description')} className="input resize-none" rows={2} placeholder="Descrição do dispositivo..." />
+                <textarea value={description} onChange={e => setDescription(e.target.value)} className="input resize-none" rows={2} placeholder="Descrição do dispositivo..." />
               </div>
             </div>
           </div>
 
-          {/* Acesso */}
+          {/* Acesso e Conectividade */}
           <div>
-            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">
-              Acesso e Conectividade
-            </h3>
+            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">Acesso e Conectividade</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">IP de Gerência *</label>
-                <input {...register('management_ip', { required: true })} className="input font-mono" placeholder="192.168.1.1" />
-                {errors.management_ip && <p className="text-red-400 text-xs mt-1">Campo obrigatório</p>}
+                <input
+                  value={managementIp}
+                  onChange={e => setManagementIp(e.target.value)}
+                  className="input font-mono"
+                  placeholder="192.168.1.1"
+                />
+                {errors.managementIp && <p className="text-red-400 text-xs mt-1">{errors.managementIp}</p>}
               </div>
               <div>
                 <label className="label">Protocolo Principal</label>
-                <select {...register('primary_protocol')} className="input">
+                <select
+                  value={primaryProtocol}
+                  onChange={e => setPrimaryProtocol(e.target.value)}
+                  className="input"
+                >
                   {PROTOCOLS.filter(p => enabledProtocols[p.value]).map(p => (
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
-                  {!Object.values(enabledProtocols).some(Boolean) && (
+                  {!PROTOCOLS.some(p => enabledProtocols[p.value]) && (
                     <option value="">Nenhum protocolo habilitado</option>
                   )}
                 </select>
               </div>
               <div>
                 <label className="label">Usuário</label>
-                <input {...register('username')} className="input" placeholder="admin" autoComplete="off" />
+                <input value={username} onChange={e => setUsername(e.target.value)} className="input" placeholder="admin" autoComplete="off" />
               </div>
               <div>
                 <label className="label">Senha</label>
                 <div className="relative">
                   <input
-                    {...register('password')}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
                     type={showPassword ? 'text' : 'password'}
                     className="input pr-10"
                     placeholder={isEdit ? '(manter atual)' : 'senha123'}
@@ -270,41 +301,32 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
               </div>
               <div>
                 <label className="label">Senha Enable / Privilegiada</label>
-                <input {...register('enable_password')} type="password" className="input" placeholder="enable password" autoComplete="new-password" />
+                <input value={enablePassword} onChange={e => setEnablePassword(e.target.value)} type="password" className="input" placeholder="enable password" autoComplete="new-password" />
               </div>
               <div>
                 <label className="label">Número de Série</label>
-                <input {...register('serial_number')} className="input font-mono" placeholder="SN123456789" />
+                <input value={serialNumber} onChange={e => setSerialNumber(e.target.value)} className="input font-mono" placeholder="SN123456789" />
               </div>
             </div>
           </div>
 
-          {/* Portas de Acesso com checkboxes */}
+          {/* Portas de Acesso */}
           <div>
-            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-1">
-              Portas de Acesso
-            </h3>
-            <p className="text-xs text-dark-400 mb-3">
-              Selecione os protocolos disponíveis neste dispositivo e configure as portas.
-            </p>
+            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-1">Portas de Acesso</h3>
+            <p className="text-xs text-dark-400 mb-3">Selecione os protocolos disponíveis neste dispositivo e configure as portas.</p>
             <div className="space-y-2">
-              {PROTOCOLS.map(({ value: proto, label }) => (
+              {PROTOCOLS.map(({ value: proto, label, defaultPort }) => (
                 <div
                   key={proto}
                   className={`flex items-center gap-4 p-3 rounded-lg border transition-colors ${
-                    enabledProtocols[proto]
-                      ? 'border-brand-600/40 bg-brand-600/5'
-                      : 'border-dark-700 bg-dark-900/30'
+                    enabledProtocols[proto] ? 'border-brand-600/40 bg-brand-600/5' : 'border-dark-700 bg-dark-900/30'
                   }`}
                 >
-                  {/* Checkbox toggle */}
                   <button
                     type="button"
                     onClick={() => toggleProtocol(proto)}
                     className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
-                      enabledProtocols[proto]
-                        ? 'bg-brand-600 border-brand-600'
-                        : 'bg-transparent border-2 border-dark-600 hover:border-dark-400'
+                      enabledProtocols[proto] ? 'bg-brand-600 border-brand-600' : 'bg-transparent border-2 border-dark-600 hover:border-dark-400'
                     }`}
                   >
                     {enabledProtocols[proto] && (
@@ -313,25 +335,19 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
                       </svg>
                     )}
                   </button>
-
-                  {/* Label */}
                   <span
-                    className={`w-16 text-sm font-medium cursor-pointer select-none ${
-                      enabledProtocols[proto] ? 'text-white' : 'text-dark-500'
-                    }`}
+                    className={`w-16 text-sm font-medium cursor-pointer select-none ${enabledProtocols[proto] ? 'text-white' : 'text-dark-500'}`}
                     onClick={() => toggleProtocol(proto)}
                   >
                     {label}
                   </span>
-
-                  {/* Campo de porta — só aparece quando habilitado */}
                   {enabledProtocols[proto] ? (
                     <div className="flex items-center gap-2 ml-auto">
                       <span className="text-xs text-dark-400">Porta:</span>
                       <input
                         type="number"
                         value={ports[proto]}
-                        onChange={e => setPorts(prev => ({ ...prev, [proto]: parseInt(e.target.value) || DEFAULT_PORTS[proto] }))}
+                        onChange={e => setPorts(prev => ({ ...prev, [proto]: parseInt(e.target.value) || defaultPort }))}
                         className="input w-24 text-center font-mono py-1.5 text-sm"
                         min={1}
                         max={65535}
@@ -355,53 +371,57 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
               {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               Configurações de Rede Avançadas
             </button>
-
             {showAdvanced && (
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Máscara de Sub-rede</label>
-                  <input {...register('subnet_mask')} className="input font-mono" placeholder="255.255.255.0" />
+                  <input value={subnetMask} onChange={e => setSubnetMask(e.target.value)} className="input font-mono" placeholder="255.255.255.0" />
                 </div>
                 <div>
                   <label className="label">Gateway</label>
-                  <input {...register('gateway')} className="input font-mono" placeholder="192.168.1.254" />
+                  <input value={gateway} onChange={e => setGateway(e.target.value)} className="input font-mono" placeholder="192.168.1.254" />
                 </div>
                 <div>
                   <label className="label">DNS Primário</label>
-                  <input {...register('dns_primary')} className="input font-mono" placeholder="8.8.8.8" />
+                  <input value={dnsPrimary} onChange={e => setDnsPrimary(e.target.value)} className="input font-mono" placeholder="8.8.8.8" />
                 </div>
                 <div>
                   <label className="label">DNS Secundário</label>
-                  <input {...register('dns_secondary')} className="input font-mono" placeholder="8.8.4.4" />
+                  <input value={dnsSecondary} onChange={e => setDnsSecondary(e.target.value)} className="input font-mono" placeholder="8.8.4.4" />
                 </div>
                 <div>
                   <label className="label">IP Loopback</label>
-                  <input {...register('loopback_ip')} className="input font-mono" placeholder="10.0.0.1" />
+                  <input value={loopbackIp} onChange={e => setLoopbackIp(e.target.value)} className="input font-mono" placeholder="10.0.0.1" />
                 </div>
                 <div>
                   <label className="label">Versão Firmware</label>
-                  <input {...register('firmware_version')} className="input" placeholder="V800R021C10" />
+                  <input value={firmwareVersion} onChange={e => setFirmwareVersion(e.target.value)} className="input" placeholder="V800R021C10" />
                 </div>
                 <div className="sm:col-span-2">
                   <label className="label">Notas / Observações</label>
-                  <textarea {...register('notes')} className="input resize-none" rows={3} placeholder="Observações sobre o dispositivo..." />
+                  <textarea value={notes} onChange={e => setNotes(e.target.value)} className="input resize-none" rows={3} placeholder="Observações sobre o dispositivo..." />
                 </div>
               </div>
             )}
           </div>
 
-          {/* Actions */}
+          {/* Ações */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-dark-700">
             <button type="button" onClick={onClose} className="btn-secondary">
               Cancelar
             </button>
-            <button type="submit" disabled={mutation.isPending} className="btn-primary">
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={mutation.isPending}
+              className="btn-primary flex items-center gap-2"
+            >
               {mutation.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <><Loader2 className="w-4 h-4 animate-spin" /> Salvando...</>
               ) : isEdit ? 'Salvar Alterações' : 'Cadastrar Dispositivo'}
             </button>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   )
