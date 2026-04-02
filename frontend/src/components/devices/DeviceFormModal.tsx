@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useMutation } from '@tanstack/react-query'
 import { X, Server, Eye, EyeOff, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
@@ -90,7 +90,7 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
     setEnabledProtocols(prev => ({ ...prev, [proto]: !prev[proto] }))
   }
 
-  const { register, handleSubmit, formState: { errors } } = useForm({
+  const { register, handleSubmit, setValue, formState: { errors } } = useForm({
     defaultValues: device ? {
       name: device.name,
       hostname: device.hostname || '',
@@ -117,6 +117,17 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
       primary_protocol: 'ssh',
     },
   })
+
+  // Sincronizar primary_protocol quando protocolos mudam
+  useEffect(() => {
+    const enabledList = PROTOCOLS.filter(p => enabledProtocols[p.value])
+    if (enabledList.length > 0) {
+      const currentProtocol = device?.primary_protocol || 'ssh'
+      if (!enabledProtocols[currentProtocol]) {
+        setValue('primary_protocol', enabledList[0].value)
+      }
+    }
+  }, [enabledProtocols])
 
   const mutation = useMutation({
     mutationFn: (data: any) => {
@@ -153,12 +164,19 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
               {isEdit ? 'Editar Dispositivo' : 'Novo Dispositivo'}
             </h2>
           </div>
-          <button onClick={onClose} className="btn-ghost p-1.5 rounded-lg">
+          <button type="button" onClick={onClose} className="btn-ghost p-1.5 rounded-lg">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit(d => mutation.mutate(d))} className="p-6 space-y-6">
+        <form
+          onSubmit={e => {
+            e.preventDefault()
+            e.stopPropagation()
+            handleSubmit(d => mutation.mutate(d))(e)
+          }}
+          className="p-6 space-y-6"
+        >
           {/* Identificação */}
           <div>
             <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">
@@ -175,8 +193,8 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
                 <input {...register('hostname')} className="input" placeholder="router-sp01.br10.net" />
               </div>
               <div>
-                <label className="label">Tipo de Dispositivo *</label>
-                <select {...register('device_type', { required: true })} className="input">
+                <label className="label">Tipo de Dispositivo {!isEdit && '*'}</label>
+                <select {...register('device_type', { required: !isEdit })} className="input">
                   <option value="">Selecione...</option>
                   {DEVICE_TYPES.map(t => (
                     <option key={t.value} value={t.value}>{t.label}</option>
