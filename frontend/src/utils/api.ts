@@ -140,7 +140,7 @@ export const backupApi = {
 }
 
 export const auditApi = {
-  list: (params?: { page?: number; per_page?: number; search?: string }) =>
+  list: (params?: { page?: number; per_page?: number; search?: string; action?: string; status?: string }) =>
     api.get('/audit', { params }),
 }
 

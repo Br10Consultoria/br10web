@@ -116,7 +116,10 @@ class Device(Base, UUIDMixin, TimestampMixin):
     backups = relationship("DeviceBackup", back_populates="device", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<Device {self.name} ({self.management_ip})>"
+        try:
+            return f"<Device {self.name} ({self.management_ip})>"
+        except Exception:
+            return "<Device (detached)>"
 
 
 class DeviceVlan(Base, UUIDMixin, TimestampMixin):

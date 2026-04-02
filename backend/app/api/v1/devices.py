@@ -139,9 +139,16 @@ async def create_device(
         status="success",
     )
     db.add(log)
+    device_id_saved = device.id
     await db.commit()
-    await db.refresh(device)
-    return device
+
+    # Recarregar com relacionamentos para evitar DetachedInstanceError
+    result2 = await db.execute(
+        select(Device)
+        .options(selectinload(Device.vlans), selectinload(Device.ports))
+        .where(Device.id == device_id_saved)
+    )
+    return result2.scalar_one()
 
 
 @router.get("/{device_id}", response_model=DeviceResponse)
@@ -208,9 +215,16 @@ async def update_device(
         status="success",
     )
     db.add(log)
+    device_id_saved = device.id
     await db.commit()
-    await db.refresh(device)
-    return device
+
+    # Recarregar com relacionamentos para evitar DetachedInstanceError
+    result2 = await db.execute(
+        select(Device)
+        .options(selectinload(Device.vlans), selectinload(Device.ports))
+        .where(Device.id == device_id_saved)
+    )
+    return result2.scalar_one()
 
 
 @router.delete("/{device_id}")

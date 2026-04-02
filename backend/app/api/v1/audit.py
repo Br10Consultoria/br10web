@@ -5,10 +5,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
+from sqlalchemy.orm import joinedload
 
 from app.core.database import get_db
 from app.models.audit import AuditLog, AuditAction
 from app.models.user import User
+from app.models.device import Device
 from app.api.v1.auth import require_admin
 
 router = APIRouter(prefix="/audit", tags=["Audit"])
@@ -25,7 +27,14 @@ async def list_audit_logs(
     current_user: User = Depends(require_admin),
 ):
     """Listar logs de auditoria com paginação e filtros. Requer role admin."""
-    query = select(AuditLog).order_by(AuditLog.created_at.desc())
+    query = (
+        select(AuditLog)
+        .options(
+            joinedload(AuditLog.user),
+            joinedload(AuditLog.device),
+        )
+        .order_by(AuditLog.created_at.desc())
+    )
     count_query = select(func.count(AuditLog.id))
 
     if search:
@@ -52,14 +61,17 @@ async def list_audit_logs(
     offset = (page - 1) * per_page
     query = query.offset(offset).limit(per_page)
     result = await db.execute(query)
-    logs = result.scalars().all()
+    logs = result.unique().scalars().all()
 
     return {
         "items": [
             {
                 "id": str(log.id),
                 "user_id": str(log.user_id) if log.user_id else None,
+                "username": log.user.username if log.user else None,
                 "device_id": str(log.device_id) if log.device_id else None,
+                "device_name": log.device.name if log.device else None,
+                "device_ip": log.device.management_ip if log.device else None,
                 "action": log.action.value if hasattr(log.action, "value") else str(log.action),
                 "resource_type": log.resource_type,
                 "resource_id": log.resource_id,
@@ -68,6 +80,8 @@ async def list_audit_logs(
                 "user_agent": log.user_agent,
                 "status": log.status,
                 "error_message": log.error_message,
+                "old_values": log.old_values,
+                "new_values": log.new_values,
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
             for log in logs
