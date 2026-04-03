@@ -6,6 +6,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.security import encrypt_field
@@ -21,6 +22,17 @@ router = APIRouter(prefix="/devices/{device_id}/vpn", tags=["VPN"])
 routes_router = APIRouter(prefix="/devices/{device_id}/routes", tags=["Static Routes"])
 
 
+# ─── Helper: carregar VPN com rotas ──────────────────────────────────────────
+async def _load_vpn(db: AsyncSession, vpn_id: str, device_id: str) -> VpnConfig:
+    """Carrega VpnConfig com static_routes via selectinload para evitar DetachedInstanceError."""
+    result = await db.execute(
+        select(VpnConfig)
+        .where(VpnConfig.id == vpn_id, VpnConfig.device_id == device_id)
+        .options(selectinload(VpnConfig.static_routes))
+    )
+    return result.scalar_one_or_none()
+
+
 # ─── VPN Configs ─────────────────────────────────────────────────────────────
 @router.get("", response_model=List[VpnConfigResponse])
 async def list_vpn_configs(
@@ -30,7 +42,9 @@ async def list_vpn_configs(
 ):
     """Lista todas as configurações VPN de um dispositivo."""
     result = await db.execute(
-        select(VpnConfig).where(VpnConfig.device_id == device_id)
+        select(VpnConfig)
+        .where(VpnConfig.device_id == device_id)
+        .options(selectinload(VpnConfig.static_routes))
     )
     return result.scalars().all()
 
@@ -64,7 +78,9 @@ async def create_vpn_config(
         db.add(route)
 
     await db.commit()
-    await db.refresh(vpn)
+
+    # Recarregar com selectinload para evitar DetachedInstanceError na serialização
+    vpn = await _load_vpn(db, str(vpn.id), device_id)
     return vpn
 
 
@@ -75,10 +91,7 @@ async def get_vpn_config(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(VpnConfig).where(VpnConfig.id == vpn_id, VpnConfig.device_id == device_id)
-    )
-    vpn = result.scalar_one_or_none()
+    vpn = await _load_vpn(db, vpn_id, device_id)
     if not vpn:
         raise HTTPException(status_code=404, detail="Configuração VPN não encontrada")
     return vpn
@@ -110,7 +123,9 @@ async def update_vpn_config(
         vpn.preshared_key_encrypted = encrypt_field(data.preshared_key)
 
     await db.commit()
-    await db.refresh(vpn)
+
+    # Recarregar com selectinload para evitar DetachedInstanceError
+    vpn = await _load_vpn(db, vpn_id, device_id)
     return vpn
 
 

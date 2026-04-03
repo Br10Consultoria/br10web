@@ -273,6 +273,7 @@ export default function VpnPage() {
         <RouteFormModal
           deviceId={selectedDevice}
           route={editRoute}
+          vpnConfigs={vpnConfigs}
           onClose={() => setShowRouteModal(false)}
           onSuccess={() => {
             setShowRouteModal(false)

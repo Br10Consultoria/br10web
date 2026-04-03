@@ -80,7 +80,13 @@ class VpnConfig(Base, UUIDMixin, TimestampMixin):
     static_routes = relationship("StaticRoute", back_populates="vpn_config", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<VPN {self.name} ({self.vpn_type}) on device {self.device_id}>"
+        try:
+            name = self.__dict__.get('name', '?')
+            vpn_type = self.__dict__.get('vpn_type', '?')
+            device_id = self.__dict__.get('device_id', '?')
+            return f"<VPN {name} ({vpn_type}) on device {device_id}>"
+        except Exception:
+            return "<VPN (detached)>"
 
 
 class StaticRoute(Base, UUIDMixin, TimestampMixin):

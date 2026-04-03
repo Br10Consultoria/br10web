@@ -1,21 +1,24 @@
 import { useForm } from 'react-hook-form'
 import { useMutation } from '@tanstack/react-query'
-import { X, Route, Loader2 } from 'lucide-react'
+import { X, Route, Loader2, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { routesApi } from '../../utils/api'
 
 interface Props {
   deviceId: string
   route?: any
+  vpnConfigs?: any[]   // Lista de VPNs do dispositivo para sugerir interfaces
   onClose: () => void
   onSuccess: () => void
 }
 
-export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: Props) {
+export default function RouteFormModal({ deviceId, route, vpnConfigs = [], onClose, onSuccess }: Props) {
   const isEdit = !!route
-  const { register, handleSubmit } = useForm({
+  const { register, handleSubmit, setValue, watch } = useForm({
     defaultValues: route || { metric: 1, is_active: true, is_persistent: true },
   })
+
+  const interfaceValue = watch('interface')
 
   const mutation = useMutation({
     mutationFn: (data: any) =>
@@ -26,6 +29,17 @@ export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: 
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Erro ao salvar rota'),
   })
+
+  // Gerar sugestões de interface a partir das VPNs do dispositivo
+  // No Mikrotik, ao criar um cliente L2TP com nome "VPN-SP01", a interface PPP gerada
+  // fica com o mesmo nome da conexão configurada
+  const vpnInterfaceSuggestions = vpnConfigs
+    .filter((v: any) => ['l2tp', 'l2tp_ipsec', 'pptp', 'sstp'].includes(v.vpn_type))
+    .map((v: any) => ({
+      label: `${v.name} (${v.vpn_type?.toUpperCase()})`,
+      value: v.name,
+      status: v.status,
+    }))
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -51,7 +65,52 @@ export default function RouteFormModal({ deviceId, route, onClose, onSuccess }: 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">Interface</label>
-              <input {...register('interface')} className="input" placeholder="ppp0, eth0, tunnel1" />
+              {/* Campo de texto livre com sugestões via datalist */}
+              <input
+                {...register('interface')}
+                className="input"
+                placeholder="Selecione ou digite..."
+                list="interface-suggestions"
+                autoComplete="off"
+              />
+              <datalist id="interface-suggestions">
+                {vpnInterfaceSuggestions.map((s: any) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+                <option value="ether1">ether1</option>
+                <option value="ether2">ether2</option>
+                <option value="bridge">bridge</option>
+                <option value="lo">loopback (lo)</option>
+              </datalist>
+
+              {/* Atalhos rápidos para VPNs disponíveis */}
+              {vpnInterfaceSuggestions.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-xs text-dark-500 flex items-center gap-1">
+                    <Info className="w-3 h-3" />
+                    VPNs deste dispositivo:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {vpnInterfaceSuggestions.map((s: any) => (
+                      <button
+                        key={s.value}
+                        type="button"
+                        onClick={() => setValue('interface', s.value)}
+                        className={`text-xs px-2.5 py-1 rounded-full border transition-all ${
+                          interfaceValue === s.value
+                            ? 'bg-brand-500/20 border-brand-500/50 text-brand-300'
+                            : 'bg-dark-700 border-dark-600 text-dark-400 hover:border-dark-500 hover:text-dark-300'
+                        }`}
+                      >
+                        {s.label}
+                        {s.status === 'active' && (
+                          <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-green-400 inline-block align-middle" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             <div>
               <label className="label">Métrica</label>
