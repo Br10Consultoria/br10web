@@ -3,12 +3,13 @@ import { motion } from 'framer-motion'
 import {
   Server, Wifi, WifiOff, AlertTriangle, Activity,
   Shield, Network, HardDrive, Clock, RefreshCw,
-  CheckCircle, TrendingUp, TrendingDown, Zap
+  CheckCircle, TrendingUp, TrendingDown, Zap, ChevronRight
 } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
 import { devicesApi } from '../utils/api'
 import { useAuthStore } from '../store/authStore'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import api from '../utils/api'
 
@@ -41,20 +42,31 @@ const STATUS_CONFIG: Record<string, { color: string; bg: string; dot: string; la
   alert: { color: 'text-orange-400', bg: 'bg-orange-500/10', dot: 'bg-orange-400', label: 'Alerta' },
 }
 
-function StatCard({ icon: Icon, label, value, color, sub }: any) {
+function StatCard({ icon: Icon, label, value, color, sub, onClick }: any) {
+  const isClickable = !!onClick
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="card"
+      onClick={onClick}
+      className={`card transition-all duration-200 ${
+        isClickable
+          ? 'cursor-pointer hover:border-brand-500/50 hover:shadow-lg hover:shadow-brand-500/10 hover:-translate-y-0.5'
+          : ''
+      }`}
     >
       <div className="flex items-center justify-between mb-3">
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${color}`}>
           <Icon className="w-5 h-5" />
         </div>
-        {sub !== undefined && (
-          <span className="text-xs text-dark-500">{sub}</span>
-        )}
+        <div className="flex items-center gap-1">
+          {sub !== undefined && (
+            <span className="text-xs text-dark-500">{sub}</span>
+          )}
+          {isClickable && (
+            <ChevronRight className="w-4 h-4 text-dark-500" />
+          )}
+        </div>
       </div>
       <p className="text-3xl font-bold text-white">{value}</p>
       <p className="text-sm text-dark-400 mt-1">{label}</p>
@@ -65,6 +77,7 @@ function StatCard({ icon: Icon, label, value, color, sub }: any) {
 export default function DashboardPage() {
   const { user } = useAuthStore()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [lastCheck, setLastCheck] = useState<Date | null>(null)
 
   const { data: stats, refetch: refetchStats } = useQuery({
@@ -170,24 +183,28 @@ export default function DashboardPage() {
           label="Total de Dispositivos"
           value={stats?.total ?? 0}
           color="bg-brand-600/20 text-brand-400"
+          onClick={() => navigate('/devices')}
         />
         <StatCard
           icon={Wifi}
           label="Online"
           value={stats?.online ?? 0}
           color="bg-green-500/20 text-green-400"
+          onClick={() => navigate('/devices?status=online')}
         />
         <StatCard
           icon={WifiOff}
           label="Offline"
           value={stats?.offline ?? 0}
           color="bg-red-500/20 text-red-400"
+          onClick={() => navigate('/devices?status=offline')}
         />
         <StatCard
           icon={AlertTriangle}
           label="Desconhecido"
           value={stats?.unknown ?? 0}
           color="bg-slate-500/20 text-slate-400"
+          onClick={() => navigate('/devices?status=unknown')}
         />
       </div>
 

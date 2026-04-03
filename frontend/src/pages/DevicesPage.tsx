@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   Server, Plus, Search, Filter, Terminal, Edit2, Trash2,
   Wifi, WifiOff, AlertTriangle, RefreshCw, ChevronDown,
-  Network, Shield, ExternalLink
+  Network, Shield, ExternalLink, X
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { devicesApi } from '../utils/api'
@@ -23,6 +23,22 @@ const DEVICE_TYPE_LABELS: Record<string, string> = {
   generic_switch: 'Switch',
   generic_olt: 'OLT',
   other: 'Outro',
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  online: 'Online',
+  offline: 'Offline',
+  maintenance: 'Manutenção',
+  unknown: 'Desconhecido',
+  alert: 'Alerta',
+}
+
+const STATUS_BADGE_CONFIG: Record<string, { color: string; bg: string; border: string }> = {
+  online:  { color: 'text-green-300',  bg: 'bg-green-500/15',  border: 'border-green-500/40' },
+  offline: { color: 'text-red-300',    bg: 'bg-red-500/15',    border: 'border-red-500/40' },
+  unknown: { color: 'text-slate-300',  bg: 'bg-slate-500/15',  border: 'border-slate-500/40' },
+  maintenance: { color: 'text-yellow-300', bg: 'bg-yellow-500/15', border: 'border-yellow-500/40' },
+  alert:   { color: 'text-orange-300', bg: 'bg-orange-500/15', border: 'border-orange-500/40' },
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -45,13 +61,36 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function DevicesPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
+
+  // Ler o filtro de status da URL (?status=online, ?status=offline, etc.)
+  const urlParams = new URLSearchParams(location.search)
+  const urlStatus = urlParams.get('status') || ''
+
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState('')
-  const [filterStatus, setFilterStatus] = useState('')
+  const [filterStatus, setFilterStatus] = useState(urlStatus)
   const [showModal, setShowModal] = useState(false)
   const [editDevice, setEditDevice] = useState<any>(null)
   const [loadingEdit, setLoadingEdit] = useState(false)
+
+  // Sincronizar filterStatus quando a URL mudar (ex: ao clicar em outro card do dashboard)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const s = params.get('status') || ''
+    setFilterStatus(s)
+  }, [location.search])
+
+  // Atualizar a URL quando o filtro de status mudar manualmente
+  const handleStatusChange = (value: string) => {
+    setFilterStatus(value)
+    if (value) {
+      navigate(`/devices?status=${value}`, { replace: true })
+    } else {
+      navigate('/devices', { replace: true })
+    }
+  }
 
   const { data: devices = [], isLoading, refetch } = useQuery({
     queryKey: ['devices', search, filterType, filterStatus],
@@ -92,13 +131,32 @@ export default function DevicesPage() {
     }
   }
 
+  // Badge de filtro ativo
+  const activeStatusConfig = filterStatus ? STATUS_BADGE_CONFIG[filterStatus] : null
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="page-header">
         <div>
           <h1 className="page-title">Dispositivos</h1>
-          <p className="text-dark-400 text-sm">{devices.length} dispositivo(s) encontrado(s)</p>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-dark-400 text-sm">{devices.length} dispositivo(s) encontrado(s)</p>
+            {filterStatus && activeStatusConfig && (
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${activeStatusConfig.bg} ${activeStatusConfig.color} ${activeStatusConfig.border}`}
+              >
+                Filtro: {STATUS_LABELS[filterStatus] || filterStatus}
+                <button
+                  onClick={() => handleStatusChange('')}
+                  className="hover:opacity-70 transition-opacity"
+                  title="Remover filtro"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            )}
+          </div>
         </div>
         <button
           onClick={() => { setEditDevice(null); setShowModal(true) }}
@@ -134,7 +192,7 @@ export default function DevicesPage() {
           </select>
           <select
             value={filterStatus}
-            onChange={e => setFilterStatus(e.target.value)}
+            onChange={e => handleStatusChange(e.target.value)}
             className="input sm:w-40"
           >
             <option value="">Todos os status</option>
@@ -157,15 +215,33 @@ export default function DevicesPage() {
       ) : devices.length === 0 ? (
         <div className="card text-center py-16">
           <Server className="w-16 h-16 mx-auto mb-4 text-dark-600" />
-          <h3 className="text-lg font-semibold text-white mb-2">Nenhum dispositivo encontrado</h3>
-          <p className="text-dark-400 mb-6">Cadastre seu primeiro dispositivo de rede</p>
-          <button
-            onClick={() => { setEditDevice(null); setShowModal(true) }}
-            className="btn-primary"
-          >
-            <Plus className="w-4 h-4" />
-            Adicionar Dispositivo
-          </button>
+          <h3 className="text-lg font-semibold text-white mb-2">
+            {filterStatus
+              ? `Nenhum dispositivo ${STATUS_LABELS[filterStatus]?.toLowerCase() || filterStatus}`
+              : 'Nenhum dispositivo encontrado'}
+          </h3>
+          <p className="text-dark-400 mb-6">
+            {filterStatus
+              ? 'Tente remover o filtro ou verificar outros status'
+              : 'Cadastre seu primeiro dispositivo de rede'}
+          </p>
+          {filterStatus ? (
+            <button
+              onClick={() => handleStatusChange('')}
+              className="btn-secondary"
+            >
+              <X className="w-4 h-4" />
+              Remover Filtro
+            </button>
+          ) : (
+            <button
+              onClick={() => { setEditDevice(null); setShowModal(true) }}
+              className="btn-primary"
+            >
+              <Plus className="w-4 h-4" />
+              Adicionar Dispositivo
+            </button>
+          )}
         </div>
       ) : (
         <div className="devices-grid">
