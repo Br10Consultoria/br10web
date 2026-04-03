@@ -33,6 +33,27 @@ from app.schemas.device import (
 router = APIRouter(prefix="/devices", tags=["Devices"])
 
 
+def _sanitize_for_json(data: dict) -> dict:
+    """Converte tipos não serializáveis (UUID, Enum, datetime) para string."""
+    import uuid as _uuid
+    from enum import Enum
+    result = {}
+    for k, v in data.items():
+        if isinstance(v, _uuid.UUID):
+            result[k] = str(v)
+        elif isinstance(v, Enum):
+            result[k] = v.value
+        elif isinstance(v, datetime):
+            result[k] = v.isoformat()
+        elif isinstance(v, dict):
+            result[k] = _sanitize_for_json(v)
+        elif isinstance(v, list):
+            result[k] = [str(i) if isinstance(i, _uuid.UUID) else i for i in v]
+        else:
+            result[k] = v
+    return result
+
+
 @router.get("", response_model=List[DeviceListResponse])
 async def list_devices(
     search: Optional[str] = Query(None, description="Busca por nome, IP, hostname"),
@@ -138,13 +159,12 @@ async def create_device(
         device_id=device.id,
         action=AuditAction.DEVICE_CREATED,
         description=f"Dispositivo criado: {device.name} ({device.management_ip})",
-        new_values={"name": device.name, "ip": device.management_ip, "type": device_data.device_type},
+        new_values=_sanitize_for_json({"name": device.name, "ip": device.management_ip, "type": device_data.device_type}),
         status="success",
     )
     db.add(log)
     device_id_saved = device.id
     await db.commit()
-
     # Recarregar com relacionamentos para evitar DetachedInstanceError
     result2 = await db.execute(
         select(Device)
@@ -220,8 +240,8 @@ async def update_device(
         device_id=device.id,
         action=AuditAction.DEVICE_UPDATED,
         description=f"Dispositivo atualizado: {device.name}",
-        old_values=old_values,
-        new_values=update_dict,
+        old_values=_sanitize_for_json(old_values),
+        new_values=_sanitize_for_json(update_dict),
         status="success",
     )
     db.add(log)

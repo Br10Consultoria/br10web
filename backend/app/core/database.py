@@ -2,13 +2,37 @@
 BR10 NetManager - Database Configuration
 Configuração assíncrona do PostgreSQL com SQLAlchemy.
 """
+import json
+import uuid
 import logging
+from datetime import datetime
+from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from typing import AsyncGenerator
 
 from app.core.config import settings
+
+
+class _UUIDEncoder(json.JSONEncoder):
+    """Encoder JSON que converte UUID, Enum e datetime para tipos serializáveis."""
+    def default(self, obj):
+        if isinstance(obj, uuid.UUID):
+            return str(obj)
+        if isinstance(obj, Enum):
+            return obj.value
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+def _json_serializer(obj):
+    return json.dumps(obj, cls=_UUIDEncoder)
+
+
+def _json_deserializer(s):
+    return json.loads(s)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +44,8 @@ async_engine = create_async_engine(
     max_overflow=40,
     pool_pre_ping=True,
     pool_recycle=3600,
+    json_serializer=_json_serializer,
+    json_deserializer=_json_deserializer,
 )
 
 AsyncSessionLocal = async_sessionmaker(
