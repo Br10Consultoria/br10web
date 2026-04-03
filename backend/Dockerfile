@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     openssh-client \
     tzdata \
+    iputils-ping \
     && ln -snf /usr/share/zoneinfo/America/Bahia /etc/localtime \
     && echo 'America/Bahia' > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*

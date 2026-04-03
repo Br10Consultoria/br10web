@@ -4,6 +4,7 @@ CRUD completo para dispositivos de rede.
 """
 import os
 import uuid
+import asyncio
 import aiofiles
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -643,7 +644,7 @@ async def check_single_device_status(
     if not device:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispositivo não encontrado")
 
-    import asyncio as _asyncio
+    from app.core.scheduler import check_device_reachable
 
     ip = device.management_ip
     ports_to_try = []
@@ -661,28 +662,14 @@ async def check_single_device_status(
         ports_to_try = [22, 23, 80, 443, 8291]
     ports_to_try = list(set(ports_to_try))
 
-    async def _single_tcp(port: int) -> bool:
-        try:
-            reader, writer = await _asyncio.wait_for(
-                _asyncio.open_connection(ip, port), timeout=2.0
-            )
-            writer.close()
-            try:
-                await _asyncio.wait_for(writer.wait_closed(), timeout=1.0)
-            except Exception:
-                pass
-            return True
-        except Exception:
-            return False
-
+    # Usa ICMP ping primeiro, TCP como fallback
     new_status = DeviceStatus.OFFLINE
     try:
-        port_tasks = [_single_tcp(p) for p in ports_to_try]
-        port_results = await _asyncio.wait_for(
-            _asyncio.gather(*port_tasks, return_exceptions=True),
-            timeout=8.0
+        is_reachable = await asyncio.wait_for(
+            check_device_reachable(ip, ports_to_try),
+            timeout=12.0
         )
-        if any(r is True for r in port_results):
+        if is_reachable:
             new_status = DeviceStatus.ONLINE
     except Exception:
         pass
@@ -709,8 +696,7 @@ async def check_devices_status(
     current_user: User = Depends(require_technician_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verifica o status dos dispositivos via TCP connect e atualiza no banco."""
-    import asyncio
+    """Verifica o status dos dispositivos via ICMP + TCP connect e atualiza no banco."""
     
     # Se não especificar IDs, verifica todos (exceto em manutenção)
     device_ids = body.device_ids if body else None
@@ -721,23 +707,10 @@ async def check_devices_status(
     result = await db.execute(query)
     devices = result.scalars().all()
     
-    async def _tcp_try(ip: str, port: int) -> bool:
-        """Tenta conexão TCP com timeout curto."""
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, port), timeout=2.0
-            )
-            writer.close()
-            try:
-                await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
-            except Exception:
-                pass
-            return True
-        except Exception:
-            return False
+    from app.core.scheduler import check_device_reachable
 
     async def check_device(device: Device) -> DeviceStatus:
-        """Testa todas as portas do dispositivo em PARALELO. Sem ICMP."""
+        """Verifica dispositivo via ICMP ping + TCP connect em paralelo."""
         ip = device.management_ip
         ports_to_try = []
         if device.ssh_port and device.ssh_port > 0:
@@ -754,16 +727,13 @@ async def check_devices_status(
             ports_to_try = [22, 23, 80, 443, 8291]
         ports_to_try = list(set(ports_to_try))
         try:
-            port_tasks = [_tcp_try(ip, p) for p in ports_to_try]
-            port_results = await asyncio.wait_for(
-                asyncio.gather(*port_tasks, return_exceptions=True),
-                timeout=8.0
+            is_reachable = await asyncio.wait_for(
+                check_device_reachable(ip, ports_to_try),
+                timeout=12.0
             )
-            if any(r is True for r in port_results):
-                return DeviceStatus.ONLINE
+            return DeviceStatus.ONLINE if is_reachable else DeviceStatus.OFFLINE
         except Exception:
-            pass
-        return DeviceStatus.OFFLINE
+            return DeviceStatus.OFFLINE
 
     # Verifica todos os dispositivos em paralelo
     tasks = [check_device(device) for device in devices]
@@ -820,9 +790,7 @@ async def ping_target(
 ):
     """Testa conectividade com um IP a partir do servidor (TCP connect nas portas comuns).
     Usado para validar rotas estáticas e next hops antes de salvar."""
-    import asyncio as _asyncio
     import time
-
     target = body.target_ip
     # Portas para testar (em ordem de prioridade)
     ports_to_try = [body.port] if body.port else [22, 23, 80, 443, 8291, 8080, 8443]

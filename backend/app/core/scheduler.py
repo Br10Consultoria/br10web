@@ -19,8 +19,29 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone="America/Bahia")
 
 
+async def icmp_ping(ip: str, timeout: float = 3.0) -> bool:
+    """
+    Testa conectividade via ICMP ping.
+    Requer iputils-ping instalado na imagem Docker.
+    Retorna True se o host responder.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ping", "-c", "1", "-W", str(int(timeout)), ip,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(process.communicate(), timeout=timeout + 1)
+        return process.returncode == 0
+    except Exception:
+        return False
+
+
 async def tcp_connect(ip: str, port: int, timeout: float = 2.0) -> bool:
-    """Tenta uma conexão TCP simples. Retorna True se conectar."""
+    """
+    Tenta uma conexão TCP simples.
+    Retorna True se a porta estiver aberta e acessível.
+    """
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(ip, port), timeout=timeout
@@ -37,27 +58,45 @@ async def tcp_connect(ip: str, port: int, timeout: float = 2.0) -> bool:
 
 async def check_device_reachable(ip: str, ports: list = None) -> bool:
     """
-    Verifica se um dispositivo está acessível testando todas as portas
-    em PARALELO com timeout curto (2s por porta).
-    Sem ICMP/ping — não funciona em containers Docker sem NET_ADMIN.
+    Verifica se um dispositivo está acessível usando:
+    1. ICMP ping (método principal — funciona mesmo sem portas abertas)
+    2. TCP connect nas portas configuradas (fallback)
+
+    Retorna True se qualquer método confirmar conectividade.
     """
+    # Método 1: ICMP ping (rápido, não depende de portas abertas)
+    try:
+        ping_ok = await asyncio.wait_for(icmp_ping(ip, timeout=3.0), timeout=5.0)
+        if ping_ok:
+            return True
+    except Exception:
+        pass
+
+    # Método 2: TCP connect nas portas configuradas (fallback)
     if not ports:
         ports = [22, 23, 80, 443, 8291]
 
-    # Remove duplicatas e portas inválidas
     ports = list(set(p for p in ports if p and 1 <= p <= 65535))
     if not ports:
         ports = [22, 23, 80, 443, 8291]
 
-    # Testa todas as portas em paralelo — timeout de 2s por porta
-    tasks = [tcp_connect(ip, port, timeout=2.0) for port in ports]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    return any(r is True for r in results)
+    try:
+        tcp_tasks = [tcp_connect(ip, port, timeout=2.0) for port in ports]
+        tcp_results = await asyncio.wait_for(
+            asyncio.gather(*tcp_tasks, return_exceptions=True),
+            timeout=6.0
+        )
+        if any(r is True for r in tcp_results):
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 async def run_device_status_check():
     """
-    Task agendada: verifica o status de todos os dispositivos via ping
+    Task agendada: verifica o status de todos os dispositivos via ICMP + TCP
     e atualiza o banco de dados. Executada a cada 5 minutos.
     """
     start_time = datetime.now(timezone.utc)
@@ -75,31 +114,42 @@ async def run_device_status_check():
                 logger.info("[Scheduler] Nenhum dispositivo encontrado para verificar.")
                 return
 
-            logger.info(f"[Scheduler] Verificando {len(devices)} dispositivos...")
+            logger.info(f"[Scheduler] Verificando {len(devices)} dispositivos (ICMP + TCP)...")
 
-            # Verifica todos em paralelo (TCP connect nas portas de gerência)
             def get_device_ports(d: Device) -> list:
                 ports = []
-                if d.ssh_port: ports.append(d.ssh_port)
-                if d.telnet_port: ports.append(d.telnet_port)
-                if d.http_port: ports.append(d.http_port)
-                if d.https_port: ports.append(d.https_port)
+                if d.ssh_port and d.ssh_port > 0:
+                    ports.append(d.ssh_port)
+                if d.telnet_port and d.telnet_port > 0:
+                    ports.append(d.telnet_port)
+                if d.winbox_port:
+                    ports.append(d.winbox_port)
+                if d.http_port:
+                    ports.append(d.http_port)
+                if d.https_port:
+                    ports.append(d.https_port)
                 return ports or [22, 23, 80, 443, 8291]
-            
-            # Cada dispositivo tem timeout global de 8s
+
+            # Cada dispositivo tem timeout global de 12s (ICMP 5s + TCP 6s + margem)
             async def check_with_timeout(device: Device) -> bool:
                 try:
                     return await asyncio.wait_for(
-                        check_device_reachable(device.management_ip, get_device_ports(device)),
-                        timeout=8.0
+                        check_device_reachable(
+                            device.management_ip,
+                            get_device_ports(device)
+                        ),
+                        timeout=12.0
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"[Scheduler] Timeout ao verificar {device.name} ({device.management_ip})")
+                    logger.warning(
+                        f"[Scheduler] Timeout ao verificar {device.name} ({device.management_ip})"
+                    )
                     return False
                 except Exception as e:
                     logger.warning(f"[Scheduler] Erro ao verificar {device.name}: {e}")
                     return False
 
+            # Verifica todos os dispositivos em paralelo
             tasks = [check_with_timeout(device) for device in devices]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -125,6 +175,7 @@ async def run_device_status_check():
                         f"{old_status} → {new_status.value}"
                     )
                 elif is_online:
+                    # Atualiza last_seen mesmo sem mudança de status
                     device.last_seen = datetime.now(timezone.utc)
 
                 if is_online:
@@ -159,8 +210,8 @@ def start_scheduler():
         id="check_device_status",
         name="Verificação de Status dos Dispositivos",
         replace_existing=True,
-        max_instances=1,  # Garante que apenas uma instância roda por vez
-        misfire_grace_time=60,  # Tolera até 60s de atraso antes de pular
+        max_instances=1,       # Garante que apenas uma instância roda por vez
+        misfire_grace_time=60, # Tolera até 60s de atraso antes de pular
     )
 
     scheduler.start()
