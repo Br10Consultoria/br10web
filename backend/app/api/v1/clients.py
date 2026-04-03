@@ -10,7 +10,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.security import require_admin, require_technician_or_admin
+from app.api.v1.auth import get_current_user, require_technician_or_admin, require_admin
 from app.models.client import Client, VendorGroup, Vendor, VendorModel, DeviceGroupType
 from app.models.user import User
 
