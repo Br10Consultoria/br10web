@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { X, Server, Eye, EyeOff, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { devicesApi } from '../../utils/api'
+import { devicesApi, clientsApi, vendorsApi } from '../../utils/api'
 
 const DEVICE_TYPES = [
   { value: 'huawei_ne8000', label: 'Huawei NE8000' },
@@ -48,6 +48,17 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
   const [serialNumber, setSerialNumber] = useState(device?.serial_number || '')
   const [notes, setNotes] = useState(device?.notes || '')
 
+  // ── Cliente e Vendor ───────────────────────────────────────────────────────
+  const [clientId, setClientId] = useState<string>(device?.client_id || '')
+  const [vendorGroupId, setVendorGroupId] = useState<string>('')
+  const [vendorId, setVendorId] = useState<string>(device?.vendor_id || '')
+  const [vendorModelId, setVendorModelId] = useState<string>(device?.vendor_model_id || '')
+
+  const [clients, setClients] = useState<any[]>([])
+  const [vendorGroups, setVendorGroups] = useState<any[]>([])
+  const [vendors, setVendors] = useState<any[]>([])
+  const [vendorModels, setVendorModels] = useState<any[]>([])
+
   // ── Campos de rede ─────────────────────────────────────────────────────────
   const [managementIp, setManagementIp] = useState(device?.management_ip || '')
   const [subnetMask, setSubnetMask] = useState(device?.subnet_mask || '')
@@ -83,14 +94,11 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
 
   const [enabledProtocols, setEnabledProtocols] = useState<Record<string, boolean>>(initEnabled)
   const [ports, setPorts] = useState<Record<string, number>>(initPorts)
-
-  // primary_protocol: controlado por useState, não por react-hook-form
   const [primaryProtocol, setPrimaryProtocol] = useState<string>(device?.primary_protocol || 'ssh')
 
   const toggleProtocol = (proto: string) => {
     setEnabledProtocols(prev => {
       const next = { ...prev, [proto]: !prev[proto] }
-      // Se o protocolo principal foi desabilitado, trocar para o primeiro habilitado
       if (!next[primaryProtocol]) {
         const first = PROTOCOLS.find(p => next[p.value])
         if (first) setPrimaryProtocol(first.value)
@@ -101,6 +109,62 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
 
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // ── Carregar clientes e grupos de vendors ──────────────────────────────────
+  useEffect(() => {
+    clientsApi.list(true).then(r => setClients(r.data)).catch(() => {})
+    vendorsApi.listGroups().then(r => {
+      setVendorGroups(r.data)
+      // Se editando, pré-selecionar o grupo do vendor atual
+      if (device?.vendor_id) {
+        const allVendors = r.data.flatMap((g: any) => g.vendors || [])
+        const v = allVendors.find((v: any) => v.id === device.vendor_id)
+        if (v) {
+          setVendorGroupId(v.group_id)
+          setVendors(r.data.find((g: any) => g.id === v.group_id)?.vendors || [])
+          setVendorModels(v.models || [])
+        }
+      }
+    }).catch(() => {})
+  }, [])
+
+  // Quando grupo muda, atualizar lista de vendors
+  const handleGroupChange = (gid: string) => {
+    setVendorGroupId(gid)
+    setVendorId('')
+    setVendorModelId('')
+    setVendorModels([])
+    const group = vendorGroups.find((g: any) => g.id === gid)
+    setVendors(group?.vendors || [])
+  }
+
+  // Quando vendor muda, atualizar lista de modelos e preencher portas padrão
+  const handleVendorChange = (vid: string) => {
+    setVendorId(vid)
+    setVendorModelId('')
+    const group = vendorGroups.find((g: any) => g.id === vendorGroupId)
+    const vendor = group?.vendors?.find((v: any) => v.id === vid)
+    setVendorModels(vendor?.models || [])
+  }
+
+  // Quando modelo muda, preencher portas padrão
+  const handleModelChange = (mid: string) => {
+    setVendorModelId(mid)
+    const group = vendorGroups.find((g: any) => g.id === vendorGroupId)
+    const vendor = group?.vendors?.find((v: any) => v.id === vendorId)
+    const modelData = vendor?.models?.find((m: any) => m.id === mid)
+    if (modelData) {
+      const newEnabled: Record<string, boolean> = { ...enabledProtocols }
+      const newPorts: Record<string, number> = { ...ports }
+      if (modelData.default_ssh_port) { newEnabled.ssh = true; newPorts.ssh = modelData.default_ssh_port }
+      if (modelData.default_telnet_port) { newEnabled.telnet = true; newPorts.telnet = modelData.default_telnet_port }
+      if (modelData.default_winbox_port) { newEnabled.winbox = true; newPorts.winbox = modelData.default_winbox_port }
+      if (modelData.default_http_port) { newEnabled.http = true; newPorts.http = modelData.default_http_port }
+      if (modelData.default_https_port) { newEnabled.https = true; newPorts.https = modelData.default_https_port }
+      setEnabledProtocols(newEnabled)
+      setPorts(newPorts)
+    }
+  }
 
   // ── Validação ──────────────────────────────────────────────────────────────
   const validate = () => {
@@ -133,12 +197,10 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
   const handleSave = () => {
     if (!validate()) return
 
-    // Montar portas
     const portData: Record<string, number | null> = {}
     for (const p of PROTOCOLS) {
       portData[p.field] = enabledProtocols[p.value] ? (ports[p.value] || p.defaultPort) : null
     }
-    // ssh_port e telnet_port são NOT NULL no banco — garantir valor mínimo
     if (!portData.ssh_port) portData.ssh_port = 22
     if (!portData.telnet_port) portData.telnet_port = 23
 
@@ -162,10 +224,12 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
       dns_secondary: dnsSecondary.trim() || null,
       loopback_ip: loopbackIp.trim() || null,
       notes: notes.trim() || null,
+      client_id: clientId || null,
+      vendor_id: vendorId || null,
+      vendor_model_id: vendorModelId || null,
       ...portData,
     }
 
-    // Só incluir senha se preenchida
     if (password) payload.password = password
     if (enablePassword) payload.enable_password = enablePassword
 
@@ -197,8 +261,51 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
           </button>
         </div>
 
-        {/* Conteúdo — NÃO é um <form>, usa botão com onClick para evitar submit nativo */}
         <div className="p-6 space-y-6">
+
+          {/* Cliente e Vendor */}
+          <div>
+            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">Cliente e Vendor</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2">
+                <label className="label">Cliente</label>
+                <select value={clientId} onChange={e => setClientId(e.target.value)} className="input">
+                  <option value="">— Sem cliente associado —</option>
+                  {clients.map((c: any) => (
+                    <option key={c.id} value={c.id}>{c.name}{c.short_name ? ` (${c.short_name})` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Grupo de Equipamento</label>
+                <select value={vendorGroupId} onChange={e => handleGroupChange(e.target.value)} className="input">
+                  <option value="">— Selecione o grupo —</option>
+                  {vendorGroups.map((g: any) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Fabricante (Vendor)</label>
+                <select value={vendorId} onChange={e => handleVendorChange(e.target.value)} className="input" disabled={!vendorGroupId}>
+                  <option value="">— Selecione o vendor —</option>
+                  {vendors.map((v: any) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="label">Modelo</label>
+                <select value={vendorModelId} onChange={e => handleModelChange(e.target.value)} className="input" disabled={!vendorId}>
+                  <option value="">— Selecione o modelo —</option>
+                  {vendorModels.map((m: any) => (
+                    <option key={m.id} value={m.id}>{m.name}{m.description ? ` — ${m.description}` : ''}</option>
+                  ))}
+                </select>
+                {vendorModelId && <p className="text-xs text-brand-400 mt-1">✓ Portas padrão do modelo aplicadas automaticamente</p>}
+              </div>
+            </div>
+          </div>
 
           {/* Identificação */}
           <div>
@@ -227,11 +334,11 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
                 {errors.deviceType && <p className="text-red-400 text-xs mt-1">{errors.deviceType}</p>}
               </div>
               <div>
-                <label className="label">Fabricante</label>
+                <label className="label">Fabricante (texto livre)</label>
                 <input value={manufacturer} onChange={e => setManufacturer(e.target.value)} className="input" placeholder="Huawei" />
               </div>
               <div>
-                <label className="label">Modelo</label>
+                <label className="label">Modelo (texto livre)</label>
                 <input value={model} onChange={e => setModel(e.target.value)} className="input" placeholder="NE8000-M8" />
               </div>
               <div>
@@ -239,8 +346,8 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
                 <input value={location} onChange={e => setLocation(e.target.value)} className="input" placeholder="DC São Paulo - Rack A3" />
               </div>
               <div>
-                <label className="label">Site / Cliente</label>
-                <input value={site} onChange={e => setSite(e.target.value)} className="input" placeholder="Cliente ABC" />
+                <label className="label">Site</label>
+                <input value={site} onChange={e => setSite(e.target.value)} className="input" placeholder="Site principal" />
               </div>
               <div className="sm:col-span-2">
                 <label className="label">Descrição</label>

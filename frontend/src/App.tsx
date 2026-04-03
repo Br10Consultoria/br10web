@@ -11,6 +11,8 @@ import SettingsPage from './pages/SettingsPage'
 import UsersPage from './pages/UsersPage'
 import AuditPage from './pages/AuditPage'
 import BackupPage from './pages/BackupPage'
+import ClientsPage from './pages/ClientsPage'
+import VendorsPage from './pages/VendorsPage'
 
 function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
   const { isAuthenticated, user } = useAuthStore()
@@ -59,6 +61,8 @@ export default function App() {
         >
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="clients" element={<ClientsPage />} />
+          <Route path="vendors" element={<VendorsPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="devices/:id" element={<DeviceDetailPage />} />
           <Route path="devices/:id/terminal" element={<TerminalPage />} />

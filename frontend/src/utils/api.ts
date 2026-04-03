@@ -148,6 +148,29 @@ export const auditApi = {
     api.get('/audit', { params }),
 }
 
+export const clientsApi = {
+  list: (activeOnly?: boolean) => api.get('/clients', { params: { active_only: activeOnly } }),
+  get: (id: string) => api.get(`/clients/${id}`),
+  create: (data: any) => api.post('/clients', data),
+  update: (id: string, data: any) => api.put(`/clients/${id}`, data),
+  delete: (id: string) => api.delete(`/clients/${id}`),
+}
+
+export const vendorsApi = {
+  listGroups: () => api.get('/vendors/groups'),
+  createGroup: (data: any) => api.post('/vendors/groups', data),
+  updateGroup: (id: string, data: any) => api.put(`/vendors/groups/${id}`, data),
+  deleteGroup: (id: string) => api.delete(`/vendors/groups/${id}`),
+  listVendors: (groupId?: string) => api.get('/vendors', { params: { group_id: groupId } }),
+  createVendor: (data: any) => api.post('/vendors', data),
+  updateVendor: (id: string, data: any) => api.put(`/vendors/${id}`, data),
+  deleteVendor: (id: string) => api.delete(`/vendors/${id}`),
+  listModels: (vendorId?: string) => api.get('/vendors/models', { params: { vendor_id: vendorId } }),
+  createModel: (data: any) => api.post('/vendors/models', data),
+  updateModel: (id: string, data: any) => api.put(`/vendors/models/${id}`, data),
+  deleteModel: (id: string) => api.delete(`/vendors/models/${id}`),
+}
+
 export const usersApi = {
   list: () => api.get('/auth/users'),
   get: (id: string) => api.get(`/auth/users/${id}`),

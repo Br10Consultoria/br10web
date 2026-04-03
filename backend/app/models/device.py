@@ -87,6 +87,11 @@ class Device(Base, UUIDMixin, TimestampMixin):
     dns_secondary = Column(String(45), nullable=True)
     loopback_ip = Column(String(45), nullable=True)
 
+    # Relacionamentos com Cliente e Vendor
+    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
+    vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True, index=True)
+    vendor_model_id = Column(UUID(as_uuid=True), ForeignKey("vendor_models.id", ondelete="SET NULL"), nullable=True, index=True)
+
     # Tags e Metadados
     tags = Column(ARRAY(String), nullable=True, default=list)
     custom_fields = Column(JSON, nullable=True, default=dict)
@@ -106,6 +111,9 @@ class Device(Base, UUIDMixin, TimestampMixin):
     notes = Column(Text, nullable=True)
 
     # Relationships
+    client = relationship("Client", back_populates="devices", foreign_keys=[client_id])
+    vendor = relationship("Vendor", back_populates="devices", foreign_keys=[vendor_id])
+    vendor_model = relationship("VendorModel", back_populates="devices", foreign_keys=[vendor_model_id])
     vlans = relationship("DeviceVlan", back_populates="device", cascade="all, delete-orphan")
     ports = relationship("DevicePort", back_populates="device", cascade="all, delete-orphan")
     vpn_configs = relationship("VpnConfig", back_populates="device", cascade="all, delete-orphan")

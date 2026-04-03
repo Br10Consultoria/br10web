@@ -141,6 +141,10 @@ class DeviceCreate(BaseModel):
     custom_fields: Optional[Dict[str, Any]] = {}
     notes: Optional[str] = None
 
+    client_id: Optional[UUID] = None
+    vendor_id: Optional[UUID] = None
+    vendor_model_id: Optional[UUID] = None
+
     @validator("management_ip")
     def validate_management_ip(cls, v):
         return validate_ip(v)
@@ -180,6 +184,10 @@ class DeviceUpdate(BaseModel):
     notes: Optional[str] = None
     is_active: Optional[bool] = None
     status: Optional[str] = None
+
+    client_id: Optional[UUID] = None
+    vendor_id: Optional[UUID] = None
+    vendor_model_id: Optional[UUID] = None
 
 
 class DeviceResponse(BaseModel):
@@ -224,9 +232,16 @@ class DeviceResponse(BaseModel):
     vlans: Optional[List[VlanResponse]] = []
     ports: Optional[List[PortResponse]] = []
 
-    @field_serializer('id')
+    client_id: Optional[UUID] = None
+    vendor_id: Optional[UUID] = None
+    vendor_model_id: Optional[UUID] = None
+    client_name: Optional[str] = None
+    vendor_name: Optional[str] = None
+    vendor_model_name: Optional[str] = None
+
+    @field_serializer('id', 'client_id', 'vendor_id', 'vendor_model_id')
     def serialize_id(self, v: UUID) -> str:
-        return str(v)
+        return str(v) if v else None
 
     class Config:
         from_attributes = True
@@ -249,9 +264,14 @@ class DeviceListResponse(BaseModel):
     tags: Optional[List[str]]
     created_at: datetime
 
-    @field_serializer('id')
+    client_id: Optional[UUID] = None
+    client_name: Optional[str] = None
+    vendor_name: Optional[str] = None
+    vendor_model_name: Optional[str] = None
+
+    @field_serializer('id', 'client_id')
     def serialize_id(self, v: UUID) -> str:
-        return str(v)
+        return str(v) if v else None
 
     class Config:
         from_attributes = True

@@ -21,6 +21,7 @@ from app.api.v1.vpn import router as vpn_router, routes_router
 from app.api.v1.terminal import router as terminal_router
 from app.api.v1.backup import router as backup_router
 from app.api.v1.audit import router as audit_router
+from app.api.v1.clients import router as clients_router, vendors_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -135,6 +136,8 @@ app.include_router(routes_router, prefix=API_PREFIX)
 app.include_router(terminal_router, prefix=API_PREFIX)
 app.include_router(backup_router, prefix=API_PREFIX)
 app.include_router(audit_router, prefix=API_PREFIX)
+app.include_router(clients_router, prefix=API_PREFIX)
+app.include_router(vendors_router, prefix=API_PREFIX)
 
 # ─── Static Files ─────────────────────────────────────────────────────────────
 uploads_dir = settings.UPLOAD_DIR
