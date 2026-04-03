@@ -14,8 +14,11 @@ from app.api.v1.auth import get_current_user, require_technician_or_admin, requi
 from app.models.client import Client, VendorGroup, Vendor, VendorModel, DeviceGroupType
 from app.models.user import User
 
+# Routers separados para evitar conflito de rotas
 router = APIRouter(prefix="/clients", tags=["Clients"])
+vendor_groups_router = APIRouter(prefix="/vendor-groups", tags=["Vendor Groups"])
 vendors_router = APIRouter(prefix="/vendors", tags=["Vendors"])
+vendor_models_router = APIRouter(prefix="/vendor-models", tags=["Vendor Models"])
 
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -35,7 +38,6 @@ class ClientCreate(BaseModel):
     notes: Optional[str] = None
     is_active: bool = True
 
-
 class ClientUpdate(BaseModel):
     name: Optional[str] = None
     short_name: Optional[str] = None
@@ -51,14 +53,12 @@ class ClientUpdate(BaseModel):
     notes: Optional[str] = None
     is_active: Optional[bool] = None
 
-
 class VendorGroupCreate(BaseModel):
     name: str
     group_type: DeviceGroupType
     description: Optional[str] = None
     icon: Optional[str] = None
     is_active: bool = True
-
 
 class VendorGroupUpdate(BaseModel):
     name: Optional[str] = None
@@ -67,7 +67,6 @@ class VendorGroupUpdate(BaseModel):
     icon: Optional[str] = None
     is_active: Optional[bool] = None
 
-
 class VendorCreate(BaseModel):
     group_id: str
     name: str
@@ -75,14 +74,12 @@ class VendorCreate(BaseModel):
     website: Optional[str] = None
     is_active: bool = True
 
-
 class VendorUpdate(BaseModel):
     group_id: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
     website: Optional[str] = None
     is_active: Optional[bool] = None
-
 
 class VendorModelCreate(BaseModel):
     vendor_id: str
@@ -95,7 +92,6 @@ class VendorModelCreate(BaseModel):
     default_winbox_port: Optional[int] = None
     notes: Optional[str] = None
     is_active: bool = True
-
 
 class VendorModelUpdate(BaseModel):
     vendor_id: Optional[str] = None
@@ -110,7 +106,7 @@ class VendorModelUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-# ─── Helper ───────────────────────────────────────────────────────────────────
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def client_to_dict(c: Client, device_count: int = 0) -> dict:
     return {
@@ -133,34 +129,32 @@ def client_to_dict(c: Client, device_count: int = 0) -> dict:
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
 
-
-def vendor_group_to_dict(g: VendorGroup) -> dict:
+def group_to_dict(g: VendorGroup) -> dict:
     return {
         "id": str(g.id),
         "name": g.name,
-        "group_type": g.group_type.value,
+        "group_type": g.group_type.value if g.group_type else None,
         "description": g.description,
         "icon": g.icon,
         "is_active": g.is_active,
+        "vendor_count": len(g.vendors) if g.vendors else 0,
         "vendors": [vendor_to_dict(v) for v in (g.vendors or [])],
         "created_at": g.created_at.isoformat() if g.created_at else None,
     }
-
 
 def vendor_to_dict(v: Vendor) -> dict:
     return {
         "id": str(v.id),
         "group_id": str(v.group_id),
         "group_name": v.group.name if v.group else None,
-        "group_type": v.group.group_type.value if v.group else None,
         "name": v.name,
         "description": v.description,
         "website": v.website,
         "is_active": v.is_active,
+        "model_count": len(v.models) if v.models else 0,
         "models": [model_to_dict(m) for m in (v.models or [])],
         "created_at": v.created_at.isoformat() if v.created_at else None,
     }
-
 
 def model_to_dict(m: VendorModel) -> dict:
     return {
@@ -190,21 +184,16 @@ async def list_clients(
 ):
     """Lista todos os clientes."""
     from app.models.device import Device
-    from sqlalchemy import and_
     query = select(Client)
     if active_only:
         query = query.where(Client.is_active == True)
     query = query.order_by(Client.name)
     result = await db.execute(query)
     clients = result.scalars().all()
-
-    # Conta dispositivos por cliente
     counts_result = await db.execute(
-        select(Device.client_id, func.count(Device.id))
-        .group_by(Device.client_id)
+        select(Device.client_id, func.count(Device.id)).group_by(Device.client_id)
     )
     counts = {str(row[0]): row[1] for row in counts_result if row[0]}
-
     return [client_to_dict(c, counts.get(str(c.id), 0)) for c in clients]
 
 
@@ -215,11 +204,9 @@ async def create_client(
     db: AsyncSession = Depends(get_db),
 ):
     """Cria um novo cliente."""
-    # Verificar duplicata
     existing = await db.execute(select(Client).where(Client.name == data.name))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Já existe um cliente com este nome")
-
     client = Client(**data.model_dump())
     db.add(client)
     await db.commit()
@@ -258,10 +245,8 @@ async def update_client(
     client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
-
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(client, field, value)
-
     await db.commit()
     await db.refresh(client)
     return client_to_dict(client)
@@ -273,7 +258,7 @@ async def delete_client(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove um cliente (dispositivos ficam sem cliente associado)."""
+    """Remove um cliente."""
     result = await db.execute(select(Client).where(Client.id == client_id))
     client = result.scalar_one_or_none()
     if not client:
@@ -284,7 +269,7 @@ async def delete_client(
 
 # ─── Vendor Groups Endpoints ──────────────────────────────────────────────────
 
-@vendors_router.get("/groups")
+@vendor_groups_router.get("")
 async def list_vendor_groups(
     current_user: User = Depends(require_technician_or_admin),
     db: AsyncSession = Depends(get_db),
@@ -298,10 +283,10 @@ async def list_vendor_groups(
         .order_by(VendorGroup.name)
     )
     groups = result.scalars().all()
-    return [vendor_group_to_dict(g) for g in groups]
+    return [group_to_dict(g) for g in groups]
 
 
-@vendors_router.post("/groups", status_code=status.HTTP_201_CREATED)
+@vendor_groups_router.post("", status_code=status.HTTP_201_CREATED)
 async def create_vendor_group(
     data: VendorGroupCreate,
     current_user: User = Depends(require_admin),
@@ -315,15 +300,10 @@ async def create_vendor_group(
     db.add(group)
     await db.commit()
     await db.refresh(group)
-    result = await db.execute(
-        select(VendorGroup)
-        .options(selectinload(VendorGroup.vendors).selectinload(Vendor.models))
-        .where(VendorGroup.id == group.id)
-    )
-    return vendor_group_to_dict(result.scalar_one())
+    return group_to_dict(group)
 
 
-@vendors_router.put("/groups/{group_id}")
+@vendor_groups_router.put("/{group_id}")
 async def update_vendor_group(
     group_id: str,
     data: VendorGroupUpdate,
@@ -331,22 +311,21 @@ async def update_vendor_group(
     db: AsyncSession = Depends(get_db),
 ):
     """Atualiza um grupo de vendors."""
-    result = await db.execute(select(VendorGroup).where(VendorGroup.id == group_id))
+    result = await db.execute(
+        select(VendorGroup).options(selectinload(VendorGroup.vendors))
+        .where(VendorGroup.id == group_id)
+    )
     group = result.scalar_one_or_none()
     if not group:
         raise HTTPException(status_code=404, detail="Grupo não encontrado")
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(group, field, value)
     await db.commit()
-    result2 = await db.execute(
-        select(VendorGroup)
-        .options(selectinload(VendorGroup.vendors).selectinload(Vendor.models))
-        .where(VendorGroup.id == group_id)
-    )
-    return vendor_group_to_dict(result2.scalar_one())
+    await db.refresh(group)
+    return group_to_dict(group)
 
 
-@vendors_router.delete("/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@vendor_groups_router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_vendor_group(
     group_id: str,
     current_user: User = Depends(require_admin),
@@ -392,7 +371,6 @@ async def create_vendor(
     group_result = await db.execute(select(VendorGroup).where(VendorGroup.id == data.group_id))
     if not group_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Grupo não encontrado")
-
     vendor = Vendor(**data.model_dump())
     db.add(vendor)
     await db.commit()
@@ -423,7 +401,6 @@ async def update_vendor(
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(vendor, field, value)
     await db.commit()
-    await db.refresh(vendor)
     result2 = await db.execute(
         select(Vendor).options(selectinload(Vendor.group), selectinload(Vendor.models))
         .where(Vendor.id == vendor_id)
@@ -448,7 +425,7 @@ async def delete_vendor(
 
 # ─── Vendor Models Endpoints ──────────────────────────────────────────────────
 
-@vendors_router.get("/models")
+@vendor_models_router.get("")
 async def list_vendor_models(
     vendor_id: Optional[str] = None,
     current_user: User = Depends(require_technician_or_admin),
@@ -464,7 +441,7 @@ async def list_vendor_models(
     return [model_to_dict(m) for m in models]
 
 
-@vendors_router.post("/models", status_code=status.HTTP_201_CREATED)
+@vendor_models_router.post("", status_code=status.HTTP_201_CREATED)
 async def create_vendor_model(
     data: VendorModelCreate,
     current_user: User = Depends(require_admin),
@@ -474,7 +451,6 @@ async def create_vendor_model(
     vendor_result = await db.execute(select(Vendor).where(Vendor.id == data.vendor_id))
     if not vendor_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Vendor não encontrado")
-
     model = VendorModel(**data.model_dump())
     db.add(model)
     await db.commit()
@@ -486,7 +462,7 @@ async def create_vendor_model(
     return model_to_dict(result.scalar_one())
 
 
-@vendors_router.put("/models/{model_id}")
+@vendor_models_router.put("/{model_id}")
 async def update_vendor_model(
     model_id: str,
     data: VendorModelUpdate,
@@ -511,7 +487,7 @@ async def update_vendor_model(
     return model_to_dict(result2.scalar_one())
 
 
-@vendors_router.delete("/models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+@vendor_models_router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_vendor_model(
     model_id: str,
     current_user: User = Depends(require_admin),

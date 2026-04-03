@@ -39,7 +39,7 @@ class Client(Base, UUIDMixin, TimestampMixin):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Relationships
-    devices = relationship("Device", back_populates="client", lazy="dynamic")
+    devices = relationship("Device", back_populates="client", lazy="noload")
 
     def __repr__(self):
         return f"<Client {self.name}>"
@@ -75,7 +75,7 @@ class Vendor(Base, UUIDMixin, TimestampMixin):
     # Relationships
     group = relationship("VendorGroup", back_populates="vendors")
     models = relationship("VendorModel", back_populates="vendor", cascade="all, delete-orphan")
-    devices = relationship("Device", back_populates="vendor", lazy="dynamic")
+    devices = relationship("Device", back_populates="vendor", lazy="noload")
 
     def __repr__(self):
         return f"<Vendor {self.name}>"
@@ -98,7 +98,7 @@ class VendorModel(Base, UUIDMixin, TimestampMixin):
 
     # Relationships
     vendor = relationship("Vendor", back_populates="models")
-    devices = relationship("Device", back_populates="vendor_model", lazy="dynamic")
+    devices = relationship("Device", back_populates="vendor_model", lazy="noload")
 
     def __repr__(self):
         return f"<VendorModel {self.name}>"
