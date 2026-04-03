@@ -69,9 +69,6 @@ services:
       - backend_backups:/app/backups
       - backend_uploads:/app/uploads
       - backend_logs:/app/logs
-      - vpn_configs:/app/vpn/xl2tpd
-      - vpn_ppp:/app/vpn/ppp
-      - vpn_run:/app/vpn/run
     # Capacidades necessárias para criar conexões VPN L2TP
     cap_add:
       - NET_ADMIN
@@ -166,12 +163,6 @@ volumes:
   backend_logs:
     driver: local
   nginx_logs:
-    driver: local
-  vpn_configs:
-    driver: local
-  vpn_ppp:
-    driver: local
-  vpn_run:
     driver: local
 
 networks:

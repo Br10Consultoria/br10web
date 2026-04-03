@@ -124,6 +124,17 @@ async def create_admin():
 asyncio.run(create_admin())
 PYEOF
 
+# ─── Criar diretórios VPN (garantir permissões corretas em runtime) ──────────
+echo "[entrypoint] Preparando diretórios VPN..."
+VPN_BASE="${VPN_BASE_DIR:-/app/vpn}"
+mkdir -p \
+    "${VPN_BASE}/xl2tpd" \
+    "${VPN_BASE}/ppp/peers" \
+    "${VPN_BASE}/run" \
+    "${VPN_BASE}/log"
+chmod -R 755 "${VPN_BASE}" 2>/dev/null || true
+echo "[entrypoint] Diretórios VPN prontos em ${VPN_BASE}"
+
 echo "[entrypoint] Iniciando servidor FastAPI na porta 8000..."
 # Usar 1 worker para evitar scheduler duplicado (FastAPI async é eficiente com 1 worker)
 exec uvicorn app.main:app \
