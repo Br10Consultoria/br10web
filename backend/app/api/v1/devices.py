@@ -168,7 +168,13 @@ async def create_device(
     # Recarregar com relacionamentos para evitar DetachedInstanceError
     result2 = await db.execute(
         select(Device)
-        .options(selectinload(Device.vlans), selectinload(Device.ports))
+        .options(
+            selectinload(Device.vlans),
+            selectinload(Device.ports),
+            selectinload(Device.client),
+            selectinload(Device.vendor),
+            selectinload(Device.vendor_model),
+        )
         .where(Device.id == device_id_saved)
     )
     return result2.scalar_one()
@@ -186,6 +192,9 @@ async def get_device(
         .options(
             selectinload(Device.vlans),
             selectinload(Device.ports),
+            selectinload(Device.client),
+            selectinload(Device.vendor),
+            selectinload(Device.vendor_model),
         )
         .where(Device.id == device_id)
     )
@@ -251,7 +260,13 @@ async def update_device(
     # Recarregar com relacionamentos para evitar DetachedInstanceError
     result2 = await db.execute(
         select(Device)
-        .options(selectinload(Device.vlans), selectinload(Device.ports))
+        .options(
+            selectinload(Device.vlans),
+            selectinload(Device.ports),
+            selectinload(Device.client),
+            selectinload(Device.vendor),
+            selectinload(Device.vendor_model),
+        )
         .where(Device.id == device_id_saved)
     )
     return result2.scalar_one()

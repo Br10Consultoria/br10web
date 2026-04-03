@@ -143,10 +143,15 @@ def group_to_dict(g: VendorGroup) -> dict:
     }
 
 def vendor_to_dict(v: Vendor) -> dict:
+    # Acessar v.group apenas se estiver carregado (evitar lazy loading em contexto async)
+    try:
+        group_name = v.group.name if v.group else None
+    except Exception:
+        group_name = None
     return {
         "id": str(v.id),
         "group_id": str(v.group_id),
-        "group_name": v.group.name if v.group else None,
+        "group_name": group_name,
         "name": v.name,
         "description": v.description,
         "website": v.website,
@@ -157,10 +162,15 @@ def vendor_to_dict(v: Vendor) -> dict:
     }
 
 def model_to_dict(m: VendorModel) -> dict:
+    # Acessar m.vendor apenas se estiver carregado (evitar lazy loading em contexto async)
+    try:
+        vendor_name = m.vendor.name if m.vendor else None
+    except Exception:
+        vendor_name = None
     return {
         "id": str(m.id),
         "vendor_id": str(m.vendor_id),
-        "vendor_name": m.vendor.name if m.vendor else None,
+        "vendor_name": vendor_name,
         "name": m.name,
         "description": m.description,
         "default_ssh_port": m.default_ssh_port,

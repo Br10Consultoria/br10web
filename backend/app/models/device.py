@@ -123,6 +123,27 @@ class Device(Base, UUIDMixin, TimestampMixin):
     photos = relationship("DevicePhoto", back_populates="device", cascade="all, delete-orphan")
     backups = relationship("DeviceBackup", back_populates="device", cascade="all, delete-orphan")
 
+    @property
+    def client_name(self) -> str | None:
+        try:
+            return self.client.name if self.client else None
+        except Exception:
+            return None
+
+    @property
+    def vendor_name(self) -> str | None:
+        try:
+            return self.vendor.name if self.vendor else None
+        except Exception:
+            return None
+
+    @property
+    def vendor_model_name(self) -> str | None:
+        try:
+            return self.vendor_model.name if self.vendor_model else None
+        except Exception:
+            return None
+
     def __repr__(self):
         try:
             return f"<Device {self.name} ({self.management_ip})>"

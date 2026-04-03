@@ -263,13 +263,23 @@ class DeviceListResponse(BaseModel):
     photo_url: Optional[str]
     tags: Optional[List[str]]
     created_at: datetime
-
+    # Campos de protocolo/porta para o modal de edição
+    primary_protocol: Optional[str] = None
+    username: Optional[str] = None
+    ssh_port: Optional[int] = None
+    telnet_port: Optional[int] = None
+    winbox_port: Optional[int] = None
+    http_port: Optional[int] = None
+    https_port: Optional[int] = None
+    # Relacionamentos
     client_id: Optional[UUID] = None
+    vendor_id: Optional[UUID] = None
+    vendor_model_id: Optional[UUID] = None
     client_name: Optional[str] = None
     vendor_name: Optional[str] = None
     vendor_model_name: Optional[str] = None
 
-    @field_serializer('id', 'client_id')
+    @field_serializer('id', 'client_id', 'vendor_id', 'vendor_model_id')
     def serialize_id(self, v: UUID) -> str:
         return str(v) if v else None
 

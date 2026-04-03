@@ -51,6 +51,7 @@ export default function DevicesPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [editDevice, setEditDevice] = useState<any>(null)
+  const [loadingEdit, setLoadingEdit] = useState(false)
 
   const { data: devices = [], isLoading, refetch } = useQuery({
     queryKey: ['devices', search, filterType, filterStatus],
@@ -74,6 +75,20 @@ export default function DevicesPage() {
   const handleDelete = (device: any) => {
     if (confirm(`Remover "${device.name}"? Esta ação não pode ser desfeita.`)) {
       deleteMutation.mutate(device.id)
+    }
+  }
+
+  // Buscar dispositivo completo antes de abrir o modal de edição
+  const handleEditDevice = async (device: any) => {
+    setLoadingEdit(true)
+    try {
+      const res = await devicesApi.get(device.id)
+      setEditDevice(res.data)
+      setShowModal(true)
+    } catch {
+      toast.error('Erro ao carregar dados do dispositivo')
+    } finally {
+      setLoadingEdit(false)
     }
   }
 
@@ -237,11 +252,16 @@ export default function DevicesPage() {
                   <ExternalLink className="w-3.5 h-3.5" />
                 </button>
                 <button
-                  onClick={() => { setEditDevice(device); setShowModal(true) }}
+                  onClick={() => handleEditDevice(device)}
+                  disabled={loadingEdit}
                   className="btn-secondary btn-sm"
                   title="Editar"
                 >
-                  <Edit2 className="w-3.5 h-3.5" />
+                  {loadingEdit ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Edit2 className="w-3.5 h-3.5" />
+                  )}
                 </button>
                 <button
                   onClick={() => handleDelete(device)}
