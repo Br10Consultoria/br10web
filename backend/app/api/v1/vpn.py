@@ -2,28 +2,33 @@
 BR10 NetManager - VPN API
 Gerenciamento de VPN L2TP e rotas estáticas.
 """
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+import logging
 
 from app.core.database import get_db
-from app.core.security import encrypt_field
-from app.models.vpn import VpnConfig, StaticRoute
+from app.core.security import encrypt_field, decrypt_field
+from app.models.vpn import VpnConfig, StaticRoute, VpnStatus
 from app.models.user import User
 from app.api.v1.auth import get_current_user, require_technician
 from app.schemas.vpn import (
     VpnConfigCreate, VpnConfigUpdate, VpnConfigResponse,
     StaticRouteCreate, StaticRouteUpdate, StaticRouteResponse
 )
+from app.services.vpn_l2tp import build_manager_from_vpn
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/devices/{device_id}/vpn", tags=["VPN"])
 routes_router = APIRouter(prefix="/devices/{device_id}/routes", tags=["Static Routes"])
 
 
 # ─── Helper: carregar VPN com rotas ──────────────────────────────────────────
-async def _load_vpn(db: AsyncSession, vpn_id: str, device_id: str) -> VpnConfig:
+async def _load_vpn(db: AsyncSession, vpn_id: str, device_id: str) -> Optional[VpnConfig]:
     """Carrega VpnConfig com static_routes via selectinload para evitar DetachedInstanceError."""
     result = await db.execute(
         select(VpnConfig)
@@ -145,6 +150,155 @@ async def delete_vpn_config(
         raise HTTPException(status_code=404, detail="Configuração VPN não encontrada")
     await db.delete(vpn)
     await db.commit()
+
+
+# ─── VPN Connect / Disconnect ─────────────────────────────────────────────────
+
+@router.post("/{vpn_id}/connect", response_model=VpnConfigResponse)
+async def connect_vpn(
+    device_id: str,
+    vpn_id: str,
+    current_user: User = Depends(require_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Conecta a VPN L2TP: gera configurações, inicia xl2tpd e disca para o servidor.
+    Aguarda a interface PPP subir (timeout: 30s).
+    """
+    vpn = await _load_vpn(db, vpn_id, device_id)
+    if not vpn:
+        raise HTTPException(status_code=404, detail="Configuração VPN não encontrada")
+
+    if vpn.status == VpnStatus.ACTIVE:
+        raise HTTPException(status_code=400, detail="VPN já está conectada")
+
+    # Descriptografar credenciais
+    password = ""
+    preshared_key = None
+    try:
+        if vpn.password_encrypted:
+            password = decrypt_field(vpn.password_encrypted)
+        if vpn.preshared_key_encrypted:
+            preshared_key = decrypt_field(vpn.preshared_key_encrypted)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao descriptografar credenciais: {str(e)}")
+
+    # Atualizar status para CONNECTING
+    vpn.status = VpnStatus.CONNECTING
+    vpn.last_error = None
+    await db.commit()
+
+    # Executar conexão
+    manager = build_manager_from_vpn(vpn, password, preshared_key)
+    success, message = await manager.connect()
+
+    if success:
+        status_info = manager.get_status()
+        vpn.status = VpnStatus.ACTIVE
+        vpn.connected_at = datetime.now(timezone.utc)
+        vpn.last_error = None
+        # Salvar interface PPP no tunnel_ip se disponível
+        if status_info.get("local_ip"):
+            vpn.tunnel_ip = status_info["local_ip"]
+        logger.info(f"VPN {vpn.name} conectada com sucesso: {message}")
+    else:
+        vpn.status = VpnStatus.ERROR
+        vpn.last_error = message
+        logger.error(f"VPN {vpn.name} falhou ao conectar: {message}")
+
+    await db.commit()
+    vpn = await _load_vpn(db, vpn_id, device_id)
+
+    if not success:
+        raise HTTPException(status_code=502, detail=message)
+
+    return vpn
+
+
+@router.post("/{vpn_id}/disconnect", response_model=VpnConfigResponse)
+async def disconnect_vpn(
+    device_id: str,
+    vpn_id: str,
+    current_user: User = Depends(require_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desconecta a VPN L2TP."""
+    vpn = await _load_vpn(db, vpn_id, device_id)
+    if not vpn:
+        raise HTTPException(status_code=404, detail="Configuração VPN não encontrada")
+
+    # Descriptografar credenciais para construir o manager
+    password = ""
+    try:
+        if vpn.password_encrypted:
+            password = decrypt_field(vpn.password_encrypted)
+    except Exception:
+        pass
+
+    manager = build_manager_from_vpn(vpn, password)
+    success, message = await manager.disconnect()
+
+    vpn.status = VpnStatus.INACTIVE
+    vpn.connected_at = None
+    vpn.tunnel_ip = None
+    if not success:
+        vpn.last_error = message
+    await db.commit()
+
+    vpn = await _load_vpn(db, vpn_id, device_id)
+    return vpn
+
+
+@router.get("/{vpn_id}/status")
+async def get_vpn_status(
+    device_id: str,
+    vpn_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retorna o status atual da conexão VPN (verifica a interface PPP no sistema).
+    Sincroniza o status no banco se houver divergência.
+    """
+    vpn = await _load_vpn(db, vpn_id, device_id)
+    if not vpn:
+        raise HTTPException(status_code=404, detail="Configuração VPN não encontrada")
+
+    password = ""
+    try:
+        if vpn.password_encrypted:
+            password = decrypt_field(vpn.password_encrypted)
+    except Exception:
+        pass
+
+    manager = build_manager_from_vpn(vpn, password)
+    status_info = manager.get_status()
+
+    # Sincronizar status no banco se houver divergência
+    is_connected = status_info["connected"]
+    db_active = vpn.status == VpnStatus.ACTIVE
+
+    if is_connected and not db_active:
+        vpn.status = VpnStatus.ACTIVE
+        if status_info.get("local_ip"):
+            vpn.tunnel_ip = status_info["local_ip"]
+        await db.commit()
+    elif not is_connected and db_active:
+        vpn.status = VpnStatus.INACTIVE
+        vpn.tunnel_ip = None
+        await db.commit()
+
+    return {
+        "vpn_id": vpn_id,
+        "name": vpn.name,
+        "status": vpn.status,
+        "connected": is_connected,
+        "interface": status_info.get("interface"),
+        "local_ip": status_info.get("local_ip"),
+        "xl2tpd_running": status_info.get("xl2tpd_running"),
+        "connected_at": vpn.connected_at,
+        "last_error": vpn.last_error,
+    }
 
 
 # ─── Static Routes ────────────────────────────────────────────────────────────

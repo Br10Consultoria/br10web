@@ -125,6 +125,13 @@ export const vpnApi = {
   create: (deviceId: string, data: any) => api.post(`/devices/${deviceId}/vpn`, data),
   update: (deviceId: string, vpnId: string, data: any) => api.put(`/devices/${deviceId}/vpn/${vpnId}`, data),
   delete: (deviceId: string, vpnId: string) => api.delete(`/devices/${deviceId}/vpn/${vpnId}`),
+  // Controle de conexão L2TP real
+  connect: (deviceId: string, vpnId: string) =>
+    api.post(`/devices/${deviceId}/vpn/${vpnId}/connect`, {}, { timeout: 45000 }),
+  disconnect: (deviceId: string, vpnId: string) =>
+    api.post(`/devices/${deviceId}/vpn/${vpnId}/disconnect`, {}, { timeout: 15000 }),
+  getStatus: (deviceId: string, vpnId: string) =>
+    api.get(`/devices/${deviceId}/vpn/${vpnId}/status`),
 }
 
 export const routesApi = {

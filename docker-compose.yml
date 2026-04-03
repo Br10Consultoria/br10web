@@ -69,6 +69,15 @@ services:
       - backend_backups:/app/backups
       - backend_uploads:/app/uploads
       - backend_logs:/app/logs
+      - vpn_configs:/etc/xl2tpd
+      - vpn_ppp:/etc/ppp
+      - vpn_run:/var/run/xl2tpd
+    # Capacidades necessárias para criar conexões VPN L2TP
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/ppp:/dev/ppp
     depends_on:
       db:
         condition: service_healthy
@@ -157,6 +166,12 @@ volumes:
   backend_logs:
     driver: local
   nginx_logs:
+    driver: local
+  vpn_configs:
+    driver: local
+  vpn_ppp:
+    driver: local
+  vpn_run:
     driver: local
 
 networks:
