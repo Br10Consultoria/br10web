@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Network, LayoutDashboard, Server, Shield,
   Users, ClipboardList, Settings, LogOut, X,
-  HardDrive, Building2, Cpu
+  HardDrive, Building2, Cpu, Terminal
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import toast from 'react-hot-toast'
@@ -18,6 +18,7 @@ const navItems = [
   { to: '/vendors', icon: Cpu, label: 'Vendors' },
   { to: '/vpn', icon: Shield, label: 'VPN & Rotas' },
   { to: '/backup', icon: HardDrive, label: 'Backup' },
+  { to: '/automation', icon: Terminal, label: 'Automações' },
 ]
 
 const adminItems = [

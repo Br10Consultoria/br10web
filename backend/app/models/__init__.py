@@ -9,6 +9,7 @@ from app.models.device import (
 )
 from app.models.vpn import VpnConfig, StaticRoute, VpnType, VpnStatus
 from app.models.audit import AuditLog, AuditAction
+from app.models.automation import CommandTemplate, CommandExecution, CommandCategory, ExecutionStatus
 
 __all__ = [
     "Base",
@@ -19,4 +20,5 @@ __all__ = [
     "ConnectionProtocol", "PortType", "PortStatus",
     "VpnConfig", "StaticRoute", "VpnType", "VpnStatus",
     "AuditLog", "AuditAction",
+    "CommandTemplate", "CommandExecution", "CommandCategory", "ExecutionStatus",
 ]

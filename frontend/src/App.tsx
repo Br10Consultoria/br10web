@@ -13,6 +13,7 @@ import AuditPage from './pages/AuditPage'
 import BackupPage from './pages/BackupPage'
 import ClientsPage from './pages/ClientsPage'
 import VendorsPage from './pages/VendorsPage'
+import AutomationPage from './pages/AutomationPage'
 
 function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
   const { isAuthenticated, user } = useAuthStore()
@@ -68,6 +69,7 @@ export default function App() {
           <Route path="devices/:id/terminal" element={<TerminalPage />} />
           <Route path="vpn" element={<VpnPage />} />
           <Route path="backup" element={<BackupPage />} />
+          <Route path="automation" element={<AutomationPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route
             path="users"

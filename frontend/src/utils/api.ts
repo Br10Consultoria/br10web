@@ -189,6 +189,25 @@ export const usersApi = {
   delete: (id: string) => api.delete(`/auth/users/${id}`),
 }
 
+export const automationApi = {
+  // Biblioteca de comandos
+  listCommands: (params?: { category?: string; vendor_id?: string; search?: string }) =>
+    api.get('/automation/commands', { params }),
+  getCommand: (id: string) => api.get(`/automation/commands/${id}`),
+  createCommand: (data: any) => api.post('/automation/commands', data),
+  updateCommand: (id: string, data: any) => api.put(`/automation/commands/${id}`, data),
+  deleteCommand: (id: string) => api.delete(`/automation/commands/${id}`),
+  // Execução
+  execute: (data: any) => api.post('/automation/execute', data, { timeout: 120000 }),
+  // Histórico
+  listHistory: (params?: { device_id?: string; template_id?: string; status?: string; limit?: number }) =>
+    api.get('/automation/history', { params }),
+  getExecution: (id: string) => api.get(`/automation/history/${id}`),
+  deleteExecution: (id: string) => api.delete(`/automation/history/${id}`),
+  // Categorias
+  listCategories: () => api.get('/automation/categories'),
+}
+
 // Alias para compatibilidade
 export const getDeviceById = (id: string) => devicesApi.get(id)
 export const getDeviceVpnConfigs = (id: string) => vpnApi.list(id)
