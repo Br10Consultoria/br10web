@@ -52,9 +52,11 @@ async def init_database():
         # Importar todos os modelos para registrar no metadata
         from app.models.base import Base
         import app.models.user
+        import app.models.client
         import app.models.device
         import app.models.vpn
         import app.models.audit
+        import app.models.automation
 
         engine = create_async_engine(db_url, echo=False)
 
@@ -65,6 +67,8 @@ async def init_database():
                 "DO $$ BEGIN CREATE TYPE vpntype AS ENUM ('L2TP', 'PPTP', 'OPENVPN', 'IPSEC', 'WIREGUARD', 'GRE', 'OTHER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE vpnstatus AS ENUM ('ACTIVE', 'INACTIVE', 'CONNECTING', 'ERROR', 'DISABLED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE auditaction AS ENUM ('LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'DEVICE_CREATE', 'DEVICE_UPDATE', 'DEVICE_DELETE', 'DEVICE_VIEW', 'CREDENTIAL_CREATE', 'CREDENTIAL_UPDATE', 'CREDENTIAL_DELETE', 'VPN_CREATE', 'VPN_UPDATE', 'VPN_DELETE', 'ROUTE_CREATE', 'ROUTE_UPDATE', 'ROUTE_DELETE', 'BACKUP_CREATE', 'BACKUP_RESTORE', 'USER_CREATE', 'USER_UPDATE', 'USER_DELETE', 'TERMINAL_CONNECT', 'TERMINAL_DISCONNECT', 'SETTINGS_UPDATE', '2FA_ENABLE', '2FA_DISABLE'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE commandcategory AS ENUM ('diagnostics', 'configuration', 'backup', 'monitoring', 'routing', 'optical', 'security', 'other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE executionstatus AS ENUM ('pending', 'running', 'success', 'error', 'timeout'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
             ]
             for sql in enums_sql:
                 await conn.execute(text(sql))
