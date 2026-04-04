@@ -62,6 +62,7 @@ async def list_devices(
     site: Optional[str] = Query(None),
     location: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
+    client_id: Optional[str] = Query(None, description="Filtrar por cliente"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     current_user: User = Depends(get_current_user),
@@ -89,6 +90,8 @@ async def list_devices(
         query = query.where(Device.location.ilike(f"%{location}%"))
     if is_active is not None:
         query = query.where(Device.is_active == is_active)
+    if client_id:
+        query = query.where(Device.client_id == client_id)
 
     query = query.order_by(Device.name).offset(skip).limit(limit)
     result = await db.execute(query)

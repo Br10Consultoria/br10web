@@ -4,9 +4,9 @@ import {
   Terminal, Play, Plus, Pencil, Trash2, Search, Filter,
   ChevronDown, CheckCircle, XCircle, Clock, Loader2,
   BookOpen, History, Cpu, X, Copy, Check, AlertCircle,
-  Wifi, WifiOff, RefreshCw
+  Wifi, WifiOff, RefreshCw, Building2
 } from 'lucide-react'
-import { automationApi, devicesApi, vendorsApi } from '../utils/api'
+import { automationApi, devicesApi, vendorsApi, clientsApi } from '../utils/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,6 +50,15 @@ interface Device {
   status?: string
   vendor_name?: string
   primary_protocol?: string
+  client_id?: string
+  client_name?: string
+}
+
+interface Client {
+  id: string
+  name: string
+  short_name?: string
+  is_active: boolean
 }
 
 // ─── Category labels ──────────────────────────────────────────────────────────
@@ -284,15 +293,14 @@ function CommandFormModal({
 
 function ExecutorPanel({
   template,
-  devices,
   onClose,
   onExecuted,
 }: {
   template: CommandTemplate
-  devices: Device[]
   onClose: () => void
   onExecuted: () => void
 }) {
+  const [clientId, setClientId] = useState('')
   const [deviceId, setDeviceId] = useState('')
   const [protocol, setProtocol] = useState('auto')
   const [interactive, setInteractive] = useState(false)
@@ -301,6 +309,27 @@ function ExecutorPanel({
   const [result, setResult] = useState<CommandExecution | null>(null)
   const [copied, setCopied] = useState(false)
   const outputRef = useRef<HTMLPreElement>(null)
+
+  // Carregar clientes ativos
+  const { data: clientsData } = useQuery({
+    queryKey: ['clients-executor'],
+    queryFn: () => clientsApi.list(true),
+  })
+
+  // Carregar dispositivos filtrados pelo cliente selecionado
+  const { data: devicesData, isLoading: loadingDevices } = useQuery({
+    queryKey: ['devices-executor', clientId],
+    queryFn: () => devicesApi.list(clientId ? { client_id: clientId, limit: 500 } : { limit: 500 }),
+    enabled: true,
+  })
+
+  const clients: Client[] = clientsData?.data || []
+  const devices: Device[] = devicesData?.data?.devices || devicesData?.data || []
+
+  // Resetar dispositivo quando cliente muda
+  useEffect(() => {
+    setDeviceId('')
+  }, [clientId])
 
   const selectedDevice = devices.find(d => d.id === deviceId)
 
@@ -366,14 +395,37 @@ function ExecutorPanel({
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {/* Config */}
           <div className="grid grid-cols-2 gap-4">
+            {/* Seleção de Cliente */}
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                <span className="flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5" />Cliente</span>
+              </label>
+              <select
+                value={clientId}
+                onChange={e => setClientId(e.target.value)}
+                className="w-full bg-[#141e2b] border border-white/10 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:border-green-500/50 text-sm"
+              >
+                <option value="">Todos os clientes</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.short_name ? ` (${c.short_name})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Seleção de Dispositivo */}
             <div className="col-span-2 sm:col-span-1">
               <label className="block text-sm font-medium text-gray-300 mb-1.5">Dispositivo *</label>
               <select
                 value={deviceId}
                 onChange={e => setDeviceId(e.target.value)}
-                className="w-full bg-[#141e2b] border border-white/10 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:border-green-500/50 text-sm"
+                disabled={loadingDevices}
+                className="w-full bg-[#141e2b] border border-white/10 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:border-green-500/50 text-sm disabled:opacity-60"
               >
-                <option value="">Selecionar dispositivo...</option>
+                <option value="">
+                  {loadingDevices ? 'Carregando...' : devices.length === 0 ? 'Nenhum dispositivo encontrado' : 'Selecionar dispositivo...'}
+                </option>
                 {devices.map(d => (
                   <option key={d.id} value={d.id}>
                     {d.name} ({d.management_ip})
@@ -382,6 +434,7 @@ function ExecutorPanel({
               </select>
               {selectedDevice && (
                 <p className="text-xs text-gray-500 mt-1">
+                  {selectedDevice.client_name && <span className="text-blue-400">{selectedDevice.client_name} · </span>}
                   Vendor: {selectedDevice.vendor_name || '—'} · Protocolo padrão: {selectedDevice.primary_protocol?.toUpperCase() || 'SSH'}
                 </p>
               )}
@@ -942,7 +995,6 @@ export default function AutomationPage() {
       {executeTemplate && (
         <ExecutorPanel
           template={executeTemplate}
-          devices={devices}
           onClose={() => setExecuteTemplate(null)}
           onExecuted={() => queryClient.invalidateQueries({ queryKey: ['automation-history-count'] })}
         />
