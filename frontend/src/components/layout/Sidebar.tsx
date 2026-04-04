@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Network, LayoutDashboard, Server, Shield,
   Users, ClipboardList, Settings, LogOut, X,
-  HardDrive, Building2, Cpu, Terminal, BookOpen, Brain
+  HardDrive, Building2, Cpu, Terminal, BookOpen, Brain, Map
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import toast from 'react-hot-toast'
@@ -14,6 +14,7 @@ interface SidebarProps {
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/clients', icon: Building2, label: 'Clientes' },
+  { to: '/client-network', icon: Map, label: 'Rede por Cliente' },
   { to: '/devices', icon: Server, label: 'Dispositivos' },
   { to: '/vendors', icon: Cpu, label: 'Vendors' },
   { to: '/vpn', icon: Shield, label: 'VPN & Rotas' },

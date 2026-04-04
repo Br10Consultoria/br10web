@@ -16,6 +16,7 @@ import VendorsPage from './pages/VendorsPage'
 import AutomationPage from './pages/AutomationPage'
 import PlaybooksPage from './pages/PlaybooksPage'
 import AIAnalysisPage from './pages/AIAnalysisPage'
+import ClientNetworkPage from './pages/ClientNetworkPage'
 
 function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
   const { isAuthenticated, user } = useAuthStore()
@@ -65,6 +66,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="clients" element={<ClientsPage />} />
+          <Route path="client-network" element={<ClientNetworkPage />} />
           <Route path="vendors" element={<VendorsPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="devices/:id" element={<DeviceDetailPage />} />

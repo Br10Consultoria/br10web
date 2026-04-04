@@ -510,3 +510,129 @@ async def delete_vendor_model(
         raise HTTPException(status_code=404, detail="Modelo não encontrado")
     await db.delete(model)
     await db.commit()
+
+
+# ─── Visão Consolidada de Rede por Cliente ────────────────────────────────────
+
+@router.get("/{client_id}/network")
+async def get_client_network(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retorna a visão consolidada de toda a infraestrutura de rede de um cliente:
+    dispositivos, VLANs, portas, rotas estáticas e VPNs.
+    """
+    from app.models.device import Device, DeviceVlan, DevicePort
+    from app.models.vpn import VpnConfig, StaticRoute
+
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    devices_result = await db.execute(
+        select(Device)
+        .where(Device.client_id == client_id, Device.is_active == True)
+        .order_by(Device.name)
+    )
+    devices = devices_result.scalars().all()
+    device_ids = [d.id for d in devices]
+
+    vlans_map: dict = {}
+    ports_map: dict = {}
+    routes_map: dict = {}
+    vpns_map: dict = {}
+
+    if device_ids:
+        for v in (await db.execute(
+            select(DeviceVlan).where(DeviceVlan.device_id.in_(device_ids))
+            .order_by(DeviceVlan.vlan_id)
+        )).scalars().all():
+            vlans_map.setdefault(str(v.device_id), []).append({
+                "id": str(v.id), "vlan_id": v.vlan_id, "name": v.name,
+                "description": v.description, "ip_address": v.ip_address,
+                "subnet_mask": v.subnet_mask, "gateway": v.gateway,
+                "is_management": v.is_management, "is_active": v.is_active,
+            })
+
+        for p in (await db.execute(
+            select(DevicePort).where(DevicePort.device_id.in_(device_ids))
+            .order_by(DevicePort.port_name)
+        )).scalars().all():
+            ports_map.setdefault(str(p.device_id), []).append({
+                "id": str(p.id), "port_name": p.port_name, "port_number": p.port_number,
+                "port_type": p.port_type.value if hasattr(p.port_type, "value") else str(p.port_type),
+                "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+                "speed_mbps": p.speed_mbps, "vlan_id": p.vlan_id, "ip_address": p.ip_address,
+                "description": p.description, "is_trunk": p.is_trunk,
+                "connected_device": p.connected_device,
+            })
+
+        for r in (await db.execute(
+            select(StaticRoute).where(StaticRoute.device_id.in_(device_ids))
+            .order_by(StaticRoute.destination_network)
+        )).scalars().all():
+            routes_map.setdefault(str(r.device_id), []).append({
+                "id": str(r.id), "destination_network": r.destination_network,
+                "next_hop": r.next_hop, "interface": r.interface,
+                "metric": r.metric, "description": r.description, "is_active": r.is_active,
+            })
+
+        for vpn in (await db.execute(
+            select(VpnConfig).where(VpnConfig.device_id.in_(device_ids))
+            .order_by(VpnConfig.name)
+        )).scalars().all():
+            vpns_map.setdefault(str(vpn.device_id), []).append({
+                "id": str(vpn.id), "name": vpn.name,
+                "vpn_type": vpn.vpn_type.value if hasattr(vpn.vpn_type, "value") else str(vpn.vpn_type),
+                "status": vpn.status.value if hasattr(vpn.status, "value") else str(vpn.status),
+                "server_ip": vpn.server_ip, "local_ip": vpn.local_ip,
+                "remote_ip": vpn.remote_ip, "tunnel_ip": vpn.tunnel_ip,
+            })
+
+    stats = {"total_devices": len(devices), "online": 0, "offline": 0, "unknown": 0,
+             "total_vlans": 0, "total_ports": 0, "total_routes": 0, "total_vpns": 0}
+    devices_data = []
+
+    for d in devices:
+        did = str(d.id)
+        d_vlans = vlans_map.get(did, [])
+        d_ports = ports_map.get(did, [])
+        d_routes = routes_map.get(did, [])
+        d_vpns = vpns_map.get(did, [])
+        status_val = d.status.value if hasattr(d.status, "value") else str(d.status)
+        stats["online" if status_val == "online" else "offline" if status_val == "offline" else "unknown"] += 1
+        stats["total_vlans"] += len(d_vlans)
+        stats["total_ports"] += len(d_ports)
+        stats["total_routes"] += len(d_routes)
+        stats["total_vpns"] += len(d_vpns)
+        devices_data.append({
+            "id": did, "name": d.name, "hostname": d.hostname, "description": d.description,
+            "device_type": d.device_type.value if hasattr(d.device_type, "value") else str(d.device_type),
+            "status": status_val, "manufacturer": d.manufacturer, "model": d.model,
+            "firmware_version": d.firmware_version, "serial_number": d.serial_number,
+            "location": d.location, "site": d.site,
+            "management_ip": d.management_ip, "subnet_mask": d.subnet_mask,
+            "gateway": d.gateway, "dns_primary": d.dns_primary, "dns_secondary": d.dns_secondary,
+            "loopback_ip": d.loopback_ip,
+            "primary_protocol": d.primary_protocol.value if hasattr(d.primary_protocol, "value") else str(d.primary_protocol),
+            "ssh_port": d.ssh_port, "telnet_port": d.telnet_port,
+            "winbox_port": d.winbox_port, "http_port": d.http_port, "https_port": d.https_port,
+            "tags": d.tags or [], "notes": d.notes,
+            "last_seen": d.last_seen.isoformat() if d.last_seen else None,
+            "last_backup": d.last_backup.isoformat() if d.last_backup else None,
+            "vlans": d_vlans, "ports": d_ports, "routes": d_routes, "vpns": d_vpns,
+        })
+
+    return {
+        "client": {
+            "id": str(client.id), "name": client.name, "short_name": client.short_name,
+            "city": client.city, "state": client.state, "contact_name": client.contact_name,
+            "contact_phone": client.contact_phone, "contact_email": client.contact_email,
+            "notes": client.notes,
+        },
+        "stats": stats,
+        "devices": devices_data,
+    }
