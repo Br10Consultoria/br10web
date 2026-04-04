@@ -7,7 +7,7 @@ import {
   Zap, List, History, Settings2, X, Save, RefreshCw,
   FileText, Server, User as UserIcon,
 } from 'lucide-react';
-import { api } from '../utils/api';
+import api from '../utils/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

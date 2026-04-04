@@ -7,7 +7,7 @@ import {
   Sparkles, FileText, AlertTriangle, Info, Eye, EyeOff,
   Save, RefreshCw, Zap, Server, User as UserIcon,
 } from 'lucide-react';
-import { api } from '../utils/api';
+import api from '../utils/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
