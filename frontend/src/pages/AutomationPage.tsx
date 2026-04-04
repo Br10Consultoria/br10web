@@ -4,8 +4,9 @@ import {
   Terminal, Play, Plus, Pencil, Trash2, Search, Filter,
   ChevronDown, CheckCircle, XCircle, Clock, Loader2,
   BookOpen, History, Cpu, X, Copy, Check, AlertCircle,
-  Wifi, WifiOff, RefreshCw, Building2
+  Wifi, WifiOff, RefreshCw, Building2, Brain
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { automationApi, devicesApi, vendorsApi, clientsApi } from '../utils/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -516,13 +517,32 @@ function ExecutorPanel({
                     <span className="text-xs text-gray-500">· {result.duration_ms}ms</span>
                   )}
                 </div>
-                <button
-                  onClick={handleCopy}
-                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors"
-                >
-                  {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copied ? 'Copiado!' : 'Copiar'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {result.status === 'success' && result.output && (
+                    <button
+                      onClick={() => {
+                        const params = new URLSearchParams({
+                          content: result.output || '',
+                          device: result.device_name || '',
+                          source: 'automation',
+                        })
+                        window.open(`/ai-analysis?${params.toString()}`, '_blank')
+                      }}
+                      className="flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-300 transition-colors border border-purple-500/30 hover:border-purple-400/50 rounded px-2 py-1"
+                      title="Analisar resultado com IA"
+                    >
+                      <Brain className="w-3.5 h-3.5" />
+                      Analisar com IA
+                    </button>
+                  )}
+                  <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? 'Copiado!' : 'Copiar'}
+                  </button>
+                </div>
               </div>
 
               {/* Output */}

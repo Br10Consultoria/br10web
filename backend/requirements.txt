@@ -23,3 +23,5 @@ celery==5.4.0
 Pillow==11.1.0
 httpx==0.28.1
 apscheduler==3.10.4
+# IA - usa openai SDK com base_url para Gemini e Anthropic (compatível com OpenAI API)
+openai>=1.50.0

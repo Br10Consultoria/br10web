@@ -57,6 +57,7 @@ async def init_database():
         import app.models.vpn
         import app.models.audit
         import app.models.automation
+        import app.models.playbook
 
         engine = create_async_engine(db_url, echo=False)
 
@@ -69,6 +70,11 @@ async def init_database():
                 "DO $$ BEGIN CREATE TYPE auditaction AS ENUM ('LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'DEVICE_CREATE', 'DEVICE_UPDATE', 'DEVICE_DELETE', 'DEVICE_VIEW', 'CREDENTIAL_CREATE', 'CREDENTIAL_UPDATE', 'CREDENTIAL_DELETE', 'VPN_CREATE', 'VPN_UPDATE', 'VPN_DELETE', 'ROUTE_CREATE', 'ROUTE_UPDATE', 'ROUTE_DELETE', 'BACKUP_CREATE', 'BACKUP_RESTORE', 'USER_CREATE', 'USER_UPDATE', 'USER_DELETE', 'TERMINAL_CONNECT', 'TERMINAL_DISCONNECT', 'SETTINGS_UPDATE', '2FA_ENABLE', '2FA_DISABLE'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE commandcategory AS ENUM ('diagnostics', 'configuration', 'backup', 'monitoring', 'routing', 'optical', 'security', 'other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE executionstatus AS ENUM ('pending', 'running', 'success', 'error', 'timeout'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE playbookstatus AS ENUM ('draft', 'active', 'disabled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE playbooksteptype AS ENUM ('telnet_connect', 'ssh_connect', 'disconnect', 'send_command', 'wait_for', 'send_string', 'ftp_download', 'ftp_upload', 'sleep', 'log'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE playbookrunstatus AS ENUM ('pending', 'running', 'success', 'error', 'timeout', 'cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE aiprovider AS ENUM ('openai', 'gemini', 'anthropic'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                "DO $$ BEGIN CREATE TYPE aianalysisstatus AS ENUM ('pending', 'running', 'success', 'error'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
             ]
             for sql in enums_sql:
                 await conn.execute(text(sql))
