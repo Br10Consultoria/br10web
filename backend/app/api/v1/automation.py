@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.security import get_current_user, decrypt_field
+from app.core.security import decrypt_field
+from app.api.v1.auth import get_current_user
 from app.models.automation import CommandTemplate, CommandExecution, CommandCategory, ExecutionStatus
 from app.models.device import Device
 from app.models.user import User
