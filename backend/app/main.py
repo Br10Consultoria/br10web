@@ -23,6 +23,7 @@ from app.api.v1.backup import router as backup_router
 from app.api.v1.audit import router as audit_router
 from app.api.v1.clients import router as clients_router, vendor_groups_router, vendors_router, vendor_models_router
 from app.api.v1.automation import router as automation_router
+from app.api.v1.playbooks import playbooks_router, ai_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,6 +143,8 @@ app.include_router(vendor_groups_router, prefix=API_PREFIX)
 app.include_router(vendors_router, prefix=API_PREFIX)
 app.include_router(vendor_models_router, prefix=API_PREFIX)
 app.include_router(automation_router, prefix=API_PREFIX)
+app.include_router(playbooks_router, prefix=API_PREFIX)
+app.include_router(ai_router, prefix=API_PREFIX)
 
 # ─── Static Files ─────────────────────────────────────────────────────────────
 uploads_dir = settings.UPLOAD_DIR

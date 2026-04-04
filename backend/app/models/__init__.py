@@ -10,6 +10,11 @@ from app.models.device import (
 from app.models.vpn import VpnConfig, StaticRoute, VpnType, VpnStatus
 from app.models.audit import AuditLog, AuditAction
 from app.models.automation import CommandTemplate, CommandExecution, CommandCategory, ExecutionStatus
+from app.models.playbook import (
+    Playbook, PlaybookStep, PlaybookExecution, PlaybookRunStatus,
+    AIProviderConfig, AIAnalysis, AIAnalysisStatus, AIProvider,
+    PlaybookStatus, PlaybookStepType,
+)
 
 __all__ = [
     "Base",
@@ -21,4 +26,8 @@ __all__ = [
     "VpnConfig", "StaticRoute", "VpnType", "VpnStatus",
     "AuditLog", "AuditAction",
     "CommandTemplate", "CommandExecution", "CommandCategory", "ExecutionStatus",
+    # Playbooks e AI
+    "Playbook", "PlaybookStep", "PlaybookExecution", "PlaybookRunStatus",
+    "AIProviderConfig", "AIAnalysis", "AIAnalysisStatus", "AIProvider",
+    "PlaybookStatus", "PlaybookStepType",
 ]

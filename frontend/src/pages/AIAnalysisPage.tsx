@@ -50,6 +50,37 @@ interface AnalysisType {
   description: string;
 }
 
+// ─── Dados estáticos de fallback ────────────────────────────────────────────────────────────────────
+
+const FALLBACK_ANALYSIS_TYPES: AnalysisType[] = [
+  { type: 'alarms',     label: 'Alarmes de Rede',       description: 'Análise de alarmes e eventos críticos' },
+  { type: 'bgp',        label: 'BGP / Roteamento',      description: 'Análise de sessões BGP e tabela de rotas' },
+  { type: 'olt',        label: 'OLT / PON',             description: 'Análise de ONUs, sinal óptico e alarmes PON' },
+  { type: 'system_log', label: 'Log de Sistema',        description: 'Análise de logs gerais do equipamento' },
+  { type: 'interfaces', label: 'Interfaces',            description: 'Análise de erros e status de interfaces' },
+  { type: 'routing',    label: 'Tabela de Rotas',       description: 'Análise da tabela de roteamento IP' },
+  { type: 'backup',     label: 'Arquivo de Backup',     description: 'Análise de arquivo de configuração' },
+  { type: 'custom',     label: 'Análise Personalizada', description: 'Análise com prompt personalizado' },
+];
+
+const FALLBACK_PROVIDERS: AIProvider[] = [
+  {
+    provider: 'openai', display_name: 'OpenAI', default_model: 'gpt-4o',
+    available_models: ['gpt-4o', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    is_active: false, max_tokens: 4096, temperature: 0.3, has_api_key: false,
+  },
+  {
+    provider: 'gemini', display_name: 'Google Gemini', default_model: 'gemini-2.5-flash',
+    available_models: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+    is_active: false, max_tokens: 4096, temperature: 0.3, has_api_key: false,
+  },
+  {
+    provider: 'anthropic', display_name: 'Anthropic Claude', default_model: 'claude-3-5-sonnet-20241022',
+    available_models: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+    is_active: false, max_tokens: 4096, temperature: 0.3, has_api_key: false,
+  },
+];
+
 // ─── API ──────────────────────────────────────────────────────────────────────
 
 const aiApi = {
@@ -358,15 +389,30 @@ export default function AIAnalysisPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
-  const { data: providers = [] } = useQuery<AIProvider[]>({
+  const { data: rawProviders } = useQuery<AIProvider[]>({
     queryKey: ['ai-providers'],
     queryFn: aiApi.providers,
+    retry: 1,
   });
+  // Mescla providers do backend com fallback: usa dados do backend se disponível,
+  // mas garante que os 3 providers sempre aparecem
+  const providers: AIProvider[] = React.useMemo(() => {
+    if (!rawProviders || rawProviders.length === 0) return FALLBACK_PROVIDERS;
+    // Garante que todos os 3 providers aparecem (mesmo que o backend retorne menos)
+    return FALLBACK_PROVIDERS.map(fp => {
+      const fromBackend = rawProviders.find(p => p.provider === fp.provider);
+      return fromBackend || fp;
+    });
+  }, [rawProviders]);
 
-  const { data: analysisTypes = [] } = useQuery<AnalysisType[]>({
+  const { data: rawAnalysisTypes } = useQuery<AnalysisType[]>({
     queryKey: ['ai-analysis-types'],
     queryFn: aiApi.analysisTypes,
+    retry: 1,
   });
+  const analysisTypes = rawAnalysisTypes && rawAnalysisTypes.length > 0
+    ? rawAnalysisTypes
+    : FALLBACK_ANALYSIS_TYPES;
 
   const { data: analyses = [], refetch: refetchAnalyses } = useQuery<AIAnalysis[]>({
     queryKey: ['ai-analyses', filterType],
