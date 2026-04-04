@@ -67,6 +67,22 @@ class AIAnalysisStatus(str, enum.Enum):
     ERROR     = "error"
 
 
+# ─── Helper para criar SAEnum compatível com PostgreSQL ───────────────────────
+# Usa native_enum=False para armazenar como VARCHAR, evitando conflito entre
+# o .name (maiúsculo) e o .value (minúsculo) dos enums Python.
+
+def _enum_col(enum_class, **kwargs):
+    """Cria um Column SAEnum que armazena o .value (minúsculo) como VARCHAR."""
+    return Column(
+        SAEnum(
+            enum_class,
+            values_callable=lambda x: [e.value for e in x],
+            native_enum=False,
+        ),
+        **kwargs,
+    )
+
+
 # ─── Playbook ─────────────────────────────────────────────────────────────────
 
 class Playbook(Base):
@@ -82,7 +98,6 @@ class Playbook(Base):
     category    = Column(String(100), default="backup", nullable=False)  # backup, diagnostics, config
 
     # Variáveis configuráveis (chave → valor padrão)
-    # Ex: {"FTP_HOST": "192.168.1.1", "FTP_USER": "ftpuser", "FTP_PASS": ""}
     variables   = Column(JSONB, default=dict, nullable=False)
 
     # Agendamento (cron expression, ex: "0 2 * * *" = todo dia às 02:00)
@@ -90,7 +105,7 @@ class Playbook(Base):
     schedule_enabled = Column(Boolean, default=False, nullable=False)
 
     # Metadados
-    status      = Column(SAEnum(PlaybookStatus), default=PlaybookStatus.ACTIVE, nullable=False)
+    status      = _enum_col(PlaybookStatus, default=PlaybookStatus.ACTIVE, nullable=False)
     is_global   = Column(Boolean, default=True, nullable=False)
     created_by  = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at  = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -123,21 +138,13 @@ class PlaybookStep(Base):
     order       = Column(Integer, nullable=False, default=0)
 
     # Tipo do passo
-    step_type   = Column(SAEnum(PlaybookStepType), nullable=False)
+    step_type   = _enum_col(PlaybookStepType, nullable=False)
 
     # Parâmetros específicos do tipo (JSON livre)
-    # SEND_COMMAND: {"command": "display version", "wait_for": "#", "timeout": 30}
-    # WAIT_FOR:     {"pattern": "Transfer complete", "timeout": 60}
-    # FTP_DOWNLOAD: {"host": "{FTP_HOST}", "user": "{FTP_USER}", "pass": "{FTP_PASS}",
-    #                "remote_path": "/backups/file.cfg",
-    #                "local_dir": "/app/backups/{CLIENT_NAME}/{DATE}",
-    #                "filename": "{DEVICE_NAME}_{DATE}.cfg"}
-    # SLEEP:        {"seconds": 2}
-    # LOG:          {"message": "Backup concluído para {DEVICE_NAME}"}
     params      = Column(JSONB, default=dict, nullable=False)
 
     # Metadados
-    label       = Column(String(200), nullable=True)   # descrição legível do passo
+    label       = Column(String(200), nullable=True)
     on_error    = Column(String(20), default="stop", nullable=False)  # stop | continue | retry
 
     # Relacionamento
@@ -172,13 +179,11 @@ class PlaybookExecution(Base):
     variables_used = Column(JSONB, default=dict, nullable=False)
 
     # Resultado
-    status        = Column(SAEnum(PlaybookRunStatus), default=PlaybookRunStatus.PENDING, nullable=False)
-    current_step  = Column(Integer, default=0, nullable=False)  # índice do passo atual
+    status        = _enum_col(PlaybookRunStatus, default=PlaybookRunStatus.PENDING, nullable=False)
+    current_step  = Column(Integer, default=0, nullable=False)
     total_steps   = Column(Integer, default=0, nullable=False)
 
     # Log detalhado passo a passo (lista de dicts)
-    # [{"step": 1, "type": "send_command", "label": "...", "status": "success",
-    #   "output": "...", "duration_ms": 1200}]
     step_logs     = Column(JSONB, default=list, nullable=False)
 
     # Arquivos gerados (ex: backups baixados)
@@ -210,10 +215,10 @@ class AIProviderConfig(Base):
     __tablename__ = "ai_provider_configs"
 
     id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    provider     = Column(SAEnum(AIProvider), nullable=False, unique=True)
-    display_name = Column(String(100), nullable=False)  # "OpenAI GPT-4", "Google Gemini", etc.
+    provider     = _enum_col(AIProvider, nullable=False, unique=True)
+    display_name = Column(String(100), nullable=False)
 
-    # Chave de API criptografada com Fernet (mesma lógica de device credentials)
+    # Chave de API criptografada com Fernet
     api_key_encrypted = Column(Text, nullable=True)
 
     # Modelo padrão para este provider
@@ -255,26 +260,26 @@ class AIAnalysis(Base):
                              nullable=True)
 
     # Origem da análise
-    source_type     = Column(String(50), nullable=False)  # "command_output" | "file_upload" | "playbook_output"
-    source_id       = Column(String(200), nullable=True)  # ID da execução ou nome do arquivo
+    source_type     = Column(String(50), nullable=False)
+    source_id       = Column(String(200), nullable=True)
 
     # Contexto
     device_name     = Column(String(200), nullable=True)
     client_name     = Column(String(200), nullable=True)
-    analysis_type   = Column(String(100), nullable=False)  # "alarms", "bgp", "olt", "system_log", "custom"
+    analysis_type   = Column(String(100), nullable=False)
 
     # Provider e modelo usados
     provider        = Column(String(50), nullable=True)
     model_used      = Column(String(100), nullable=True)
 
     # Conteúdo
-    input_text      = Column(Text, nullable=False)   # texto enviado para análise (truncado se muito grande)
-    prompt_used     = Column(Text, nullable=True)    # prompt completo enviado
-    result          = Column(Text, nullable=True)    # resposta da IA
+    input_text      = Column(Text, nullable=False)
+    prompt_used     = Column(Text, nullable=True)
+    result          = Column(Text, nullable=True)
     tokens_used     = Column(Integer, nullable=True)
 
     # Status
-    status          = Column(SAEnum(AIAnalysisStatus), default=AIAnalysisStatus.PENDING, nullable=False)
+    status          = _enum_col(AIAnalysisStatus, default=AIAnalysisStatus.PENDING, nullable=False)
     error_message   = Column(Text, nullable=True)
     duration_ms     = Column(Integer, nullable=True)
 

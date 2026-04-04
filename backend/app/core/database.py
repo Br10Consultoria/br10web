@@ -94,6 +94,14 @@ async def _run_migrations(conn):
         "CREATE INDEX IF NOT EXISTS ix_devices_client_id ON devices(client_id)",
         "CREATE INDEX IF NOT EXISTS ix_devices_vendor_id ON devices(vendor_id)",
         "CREATE INDEX IF NOT EXISTS ix_devices_vendor_model_id ON devices(vendor_model_id)",
+        # ── Converter colunas ENUM nativas para VARCHAR (compatibilidade native_enum=False) ──
+        # O SQLAlchemy com native_enum=False armazena como VARCHAR, mas o banco pode ter
+        # criado as colunas como tipo ENUM nativo. Convertemos preservando os valores.
+        "ALTER TABLE playbooks ALTER COLUMN status TYPE VARCHAR(50) USING status::text",
+        "ALTER TABLE playbook_steps ALTER COLUMN step_type TYPE VARCHAR(50) USING step_type::text",
+        "ALTER TABLE playbook_executions ALTER COLUMN status TYPE VARCHAR(50) USING status::text",
+        "ALTER TABLE ai_provider_configs ALTER COLUMN provider TYPE VARCHAR(50) USING provider::text",
+        "ALTER TABLE ai_analyses ALTER COLUMN status TYPE VARCHAR(50) USING status::text",
     ]
     for sql in migrations:
         try:
