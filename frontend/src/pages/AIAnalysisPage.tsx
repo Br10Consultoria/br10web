@@ -88,6 +88,8 @@ const aiApi = {
   configureProvider: (provider: string, data: any) =>
     api.put(`/ai/providers/${provider}`, data).then(r => r.data),
   removeProvider: (provider: string) => api.delete(`/ai/providers/${provider}`),
+  testProvider: (provider: string, data: { api_key?: string; model?: string }) =>
+    api.post(`/ai/providers/${provider}/test`, data).then(r => r.data),
   analyze: (data: any) => api.post('/ai/analyze', data).then(r => r.data),
   analyzeFile: (formData: FormData) =>
     api.post('/ai/analyze/file', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data),
@@ -125,6 +127,14 @@ function formatDuration(ms?: number) {
 
 // ─── Provider Config Card ─────────────────────────────────────────────────────
 
+interface TestResult {
+  success: boolean;
+  message: string;
+  latency_ms?: number;
+  model?: string;
+  tokens_used?: number;
+}
+
 function ProviderCard({
   provider,
   onSave,
@@ -141,9 +151,13 @@ function ProviderCard({
   const [maxTokens, setMaxTokens] = useState(provider.max_tokens);
   const [temperature, setTemperature] = useState(provider.temperature);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await onSave(provider.provider, {
         api_key: apiKey || '___keep___',
@@ -153,13 +167,36 @@ function ProviderCard({
       });
       setEditing(false);
       setApiKey('');
+      setTestResult(null);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Erro ao salvar configuração.';
+      setSaveError(msg);
     } finally {
       setSaving(false);
     }
   };
 
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await aiApi.testProvider(provider.provider, {
+        api_key: apiKey || undefined,
+        model: model,
+      });
+      setTestResult(result);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Erro ao testar conexão.';
+      setTestResult({ success: false, message: msg });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
-    <div className={`bg-[#0d1b35] border rounded-xl p-4 ${provider.is_active ? 'border-blue-700' : 'border-[#2a3a5c]'}`}>
+    <div className={`bg-[#0d1b35] border rounded-xl p-4 transition-colors ${
+      provider.is_active && provider.has_api_key ? 'border-blue-700' : 'border-[#2a3a5c]'
+    }`}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-xl">{PROVIDER_ICONS[provider.provider] || '🤖'}</span>
@@ -180,7 +217,8 @@ function ProviderCard({
             </span>
           )}
           <button
-            onClick={() => setEditing(!editing)}
+            onClick={() => { setEditing(!editing); setTestResult(null); setSaveError(null); }}
+            title="Configurar chave de API"
             className="p-1.5 text-gray-400 hover:text-white hover:bg-[#1a2a4a] rounded"
           >
             <Settings className="w-4 h-4" />
@@ -188,6 +226,7 @@ function ProviderCard({
           {provider.has_api_key && (
             <button
               onClick={() => { if (confirm('Remover configuração?')) onRemove(provider.provider); }}
+              title="Remover"
               className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-[#1a2a4a] rounded"
             >
               <Trash2 className="w-4 h-4" />
@@ -196,6 +235,7 @@ function ProviderCard({
         </div>
       </div>
 
+      {/* Info quando configurado e não editando */}
       {provider.has_api_key && !editing && (
         <div className="text-xs text-gray-400 space-y-1">
           <p>Modelo: <span className="text-white">{provider.default_model}</span></p>
@@ -203,17 +243,20 @@ function ProviderCard({
         </div>
       )}
 
+      {/* Formulário de edição */}
       {editing && (
         <div className="space-y-3 mt-3 pt-3 border-t border-[#2a3a5c]">
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Chave de API {provider.has_api_key && '(deixe em branco para manter a atual)'}</label>
+            <label className="block text-xs text-gray-400 mb-1">
+              Chave de API{provider.has_api_key && <span className="text-gray-600 ml-1">(deixe em branco para manter a atual)</span>}
+            </label>
             <div className="relative">
               <input
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                placeholder={provider.has_api_key ? '••••••••••••••••' : 'sk-...'}
-                className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-3 py-2 text-sm text-white placeholder-gray-600 pr-10"
+                onChange={e => { setApiKey(e.target.value); setTestResult(null); }}
+                placeholder={provider.has_api_key ? '••••••••••••••••' : 'Cole a chave aqui...'}
+                className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-3 py-2 text-sm text-white placeholder-gray-600 pr-10 focus:border-blue-500 focus:outline-none"
               />
               <button
                 onClick={() => setShowKey(!showKey)}
@@ -223,6 +266,7 @@ function ProviderCard({
               </button>
             </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-gray-400 mb-1">Modelo padrão</label>
@@ -246,6 +290,7 @@ function ProviderCard({
               />
             </div>
           </div>
+
           <div>
             <label className="block text-xs text-gray-400 mb-1">Temperatura: {temperature}</label>
             <input
@@ -255,21 +300,64 @@ function ProviderCard({
               min={0}
               max={1}
               step={0.1}
-              className="w-full"
+              className="w-full accent-blue-500"
             />
             <div className="flex justify-between text-xs text-gray-600">
               <span>Preciso (0)</span>
               <span>Criativo (1)</span>
             </div>
           </div>
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setEditing(false)} className="px-3 py-1.5 text-xs text-gray-400 hover:text-white">
+
+          {/* Resultado do teste */}
+          {testResult && (
+            <div className={`flex items-start gap-2 p-3 rounded-lg text-xs ${
+              testResult.success
+                ? 'bg-green-900/30 border border-green-700/50 text-green-300'
+                : 'bg-red-900/30 border border-red-700/50 text-red-300'
+            }`}>
+              {testResult.success
+                ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                : <XCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+              <div>
+                <p className="font-medium">{testResult.success ? 'Conexão OK!' : 'Falha na conexão'}</p>
+                <p className="mt-0.5 opacity-80">{testResult.message}</p>
+                {testResult.success && testResult.latency_ms && (
+                  <p className="mt-0.5 opacity-60">Latência: {testResult.latency_ms}ms · Tokens: {testResult.tokens_used ?? '-'}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Erro de salvamento */}
+          {saveError && (
+            <div className="flex items-start gap-2 p-3 rounded-lg text-xs bg-red-900/30 border border-red-700/50 text-red-300">
+              <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <p>{saveError}</p>
+            </div>
+          )}
+
+          {/* Botões */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleTest}
+              disabled={testing || (!apiKey && !provider.has_api_key)}
+              title="Testa a chave fazendo uma chamada real à API"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a2a4a] hover:bg-[#243550] border border-[#2a3a5c] text-gray-300 hover:text-white text-xs rounded-lg disabled:opacity-40 transition-colors"
+            >
+              {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+              Testar Conexão
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={() => { setEditing(false); setTestResult(null); setSaveError(null); }}
+              className="px-3 py-1.5 text-xs text-gray-400 hover:text-white"
+            >
               Cancelar
             </button>
             <button
               onClick={handleSave}
               disabled={saving || (!apiKey && !provider.has_api_key)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg disabled:opacity-50 transition-colors"
             >
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
               Salvar

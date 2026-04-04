@@ -74,12 +74,17 @@ class PlaybookExecuteRequest(BaseModel):
 
 
 class AIProviderConfigCreate(BaseModel):
-    provider: str
-    api_key: str
+    provider: Optional[str] = None   # opcional: vem da URL
+    api_key: Optional[str] = None    # None ou '___keep___' = manter chave atual
     default_model: Optional[str] = None
     max_tokens: int = 4096
     temperature: float = 0.3
     system_prompt: Optional[str] = None
+
+
+class AIProviderTestRequest(BaseModel):
+    api_key: Optional[str] = None    # se None, usa a chave salva no banco
+    model: Optional[str] = None
 
 
 class AIAnalyzeRequest(BaseModel):
@@ -607,8 +612,8 @@ async def configure_ai_provider(
         )
         db.add(config)
 
-    # Criptografar chave de API
-    if data.api_key and data.api_key.strip():
+    # Criptografar chave de API (ignorar se for placeholder '___keep___')
+    if data.api_key and data.api_key.strip() and data.api_key.strip() != '___keep___':
         config.api_key_encrypted = encrypt_field(data.api_key.strip())
         config.is_active = True
 
@@ -784,6 +789,96 @@ async def get_analysis(
     if not analysis:
         raise HTTPException(status_code=404, detail="Análise não encontrada.")
     return _analysis_to_dict(analysis)
+
+
+@ai_router.post("/providers/{provider}/test")
+async def test_ai_provider(
+    provider: str,
+    req: AIProviderTestRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Testa a conectividade com um provider de IA.
+    Envia uma mensagem simples e verifica se a resposta é válida.
+    """
+    import time
+    if provider not in AI_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Provider '{provider}' não suportado.")
+
+    provider_info = AI_PROVIDERS[provider]
+
+    # Determinar a chave de API a usar
+    api_key = None
+    if req.api_key and req.api_key.strip() and req.api_key.strip() != '___keep___':
+        # Usar a chave fornecida na requisição (antes de salvar)
+        api_key = req.api_key.strip()
+    else:
+        # Buscar a chave salva no banco
+        result = await db.execute(
+            select(AIProviderConfig).where(AIProviderConfig.provider == provider)
+        )
+        config = result.scalar_one_or_none()
+        if config and config.api_key_encrypted:
+            api_key = decrypt_field(config.api_key_encrypted)
+
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhuma chave de API disponível. Insira a chave no campo acima."
+        )
+
+    model = req.model or provider_info["default_model"]
+    start = time.time()
+
+    try:
+        from openai import AsyncOpenAI
+        base_url = provider_info.get("base_url")
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        client = AsyncOpenAI(**client_kwargs)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Responda apenas: OK"}],
+            max_tokens=10,
+            timeout=15,
+        )
+        elapsed_ms = int((time.time() - start) * 1000)
+        reply = response.choices[0].message.content.strip() if response.choices else "(sem resposta)"
+        tokens = response.usage.total_tokens if response.usage else None
+
+        return {
+            "success": True,
+            "provider": provider,
+            "model": model,
+            "response": reply,
+            "tokens_used": tokens,
+            "latency_ms": elapsed_ms,
+            "message": f"Conexão bem-sucedida com {provider_info['display_name']} ({model}) em {elapsed_ms}ms",
+        }
+    except Exception as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        error_msg = str(e)
+        # Simplificar mensagens de erro comuns
+        if "401" in error_msg or "Unauthorized" in error_msg or "invalid_api_key" in error_msg:
+            error_msg = "Chave de API inválida ou sem permissão."
+        elif "404" in error_msg and "model" in error_msg.lower():
+            error_msg = f"Modelo '{model}' não encontrado. Tente outro modelo."
+        elif "429" in error_msg or "rate_limit" in error_msg:
+            error_msg = "Limite de requisições atingido. Aguarde alguns segundos."
+        elif "Connection" in error_msg or "timeout" in error_msg.lower():
+            error_msg = "Erro de conexão. Verifique a rede do servidor."
+        return {
+            "success": False,
+            "provider": provider,
+            "model": model,
+            "response": None,
+            "tokens_used": None,
+            "latency_ms": elapsed_ms,
+            "message": error_msg,
+        }
 
 
 @ai_router.delete("/analyses/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
