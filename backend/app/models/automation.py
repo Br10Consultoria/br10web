@@ -67,7 +67,7 @@ class CommandTemplate(Base):
 
     # Relacionamentos
     executions  = relationship("CommandExecution", back_populates="template",
-                               cascade="all, delete-orphan", lazy="dynamic")
+                               cascade="all, delete-orphan", lazy="noload")
     creator     = relationship("User", foreign_keys=[created_by])
 
     def __repr__(self):

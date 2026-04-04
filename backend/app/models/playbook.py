@@ -101,7 +101,7 @@ class Playbook(Base):
                                cascade="all, delete-orphan", order_by="PlaybookStep.order",
                                lazy="selectin")
     executions  = relationship("PlaybookExecution", back_populates="playbook",
-                               cascade="all, delete-orphan", lazy="dynamic")
+                               cascade="all, delete-orphan", lazy="noload")
     creator     = relationship("User", foreign_keys=[created_by])
 
     def __repr__(self):
@@ -235,7 +235,7 @@ class AIProviderConfig(Base):
 
     # Relacionamentos
     analyses     = relationship("AIAnalysis", back_populates="provider_config",
-                                cascade="all, delete-orphan", lazy="dynamic")
+                                cascade="all, delete-orphan", lazy="noload")
 
     def __repr__(self):
         return f"<AIProviderConfig {self.provider} - {'ativo' if self.is_active else 'inativo'}>"
