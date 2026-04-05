@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     tzdata \
     iputils-ping \
+    traceroute \
+    dnsutils \
+    mtr-tiny \
     xl2tpd \
     ppp \
     iproute2 \

@@ -25,3 +25,5 @@ httpx==0.28.1
 apscheduler==3.10.4
 # IA - usa openai SDK com base_url para Gemini e Anthropic (compatível com OpenAI API)
 openai>=1.50.0
+# Ferramentas de rede - DNS lookup, DNSSEC
+dnspython==2.7.0
