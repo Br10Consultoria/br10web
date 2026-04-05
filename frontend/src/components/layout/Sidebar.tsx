@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Network, LayoutDashboard, Server, Shield,
   Users, ClipboardList, Settings, LogOut, X,
-  HardDrive, Building2, Cpu, Terminal, BookOpen, Brain, Map
+  HardDrive, Building2, Cpu, Terminal, BookOpen, Brain, Map, Wrench
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import toast from 'react-hot-toast'
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/clients', icon: Building2, label: 'Clientes' },
   { to: '/client-network', icon: Map, label: 'Rede por Cliente' },
+  { to: '/network-tools', icon: Wrench, label: 'Ferramentas' },
   { to: '/devices', icon: Server, label: 'Dispositivos' },
   { to: '/vendors', icon: Cpu, label: 'Vendors' },
   { to: '/vpn', icon: Shield, label: 'VPN & Rotas' },

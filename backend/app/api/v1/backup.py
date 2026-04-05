@@ -41,12 +41,12 @@ async def _auth_backup_create(
         raise HTTPException(status_code=401, detail="X-API-Key inválida")
 
     # JWT fallback
-    from app.core.security import verify_token
+    from app.core.security import decode_token
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Autenticação necessária")
     token = auth_header.split(" ", 1)[1]
-    payload = verify_token(token)
+    payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token inválido ou expirado")
     result = await db.execute(select(User).where(User.id == payload.get("sub")))
