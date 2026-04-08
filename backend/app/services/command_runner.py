@@ -52,37 +52,84 @@ class CommandRunner:
         self.timeout = timeout
         self.private_key = private_key
 
+    def _validate_ssh_credentials(self):
+        """
+        Valida se há credenciais suficientes para autenticação SSH.
+        Lança ValueError com mensagem clara se não houver.
+        """
+        has_password = bool(self.password and str(self.password).strip())
+        has_key = bool(self.private_key and str(self.private_key).strip())
+
+        if not has_password and not has_key:
+            raise ValueError(
+                "Nenhuma credencial de autenticação configurada para este dispositivo. "
+                "Cadastre a senha ou chave SSH privada nas configurações do dispositivo."
+            )
+
+        if not self.username or not str(self.username).strip():
+            raise ValueError(
+                "Nome de usuário não configurado para este dispositivo. "
+                "Cadastre o usuário nas configurações do dispositivo."
+            )
+
+    def _build_ssh_connect_kwargs(self) -> dict:
+        """Monta os kwargs de conexão SSH com os métodos de autenticação disponíveis."""
+        connect_kwargs = {
+            "hostname": self.host,
+            "port": self.port,
+            "username": self.username,
+            "timeout": self.timeout,
+            "allow_agent": False,
+            "look_for_keys": False,
+        }
+
+        has_key = bool(self.private_key and str(self.private_key).strip())
+        has_password = bool(self.password and str(self.password).strip())
+
+        if has_key:
+            import io
+            key_file = io.StringIO(self.private_key)
+            pkey = None
+            # Tentar RSA
+            try:
+                pkey = paramiko.RSAKey.from_private_key(key_file)
+            except Exception:
+                pass
+            # Tentar Ed25519
+            if pkey is None:
+                try:
+                    key_file.seek(0)
+                    pkey = paramiko.Ed25519Key.from_private_key(key_file)
+                except Exception:
+                    pass
+            # Tentar ECDSA
+            if pkey is None:
+                try:
+                    key_file.seek(0)
+                    pkey = paramiko.ECDSAKey.from_private_key(key_file)
+                except Exception:
+                    pass
+            if pkey:
+                connect_kwargs["pkey"] = pkey
+
+        if has_password:
+            connect_kwargs["password"] = self.password
+
+        return connect_kwargs
+
     # ─── SSH ──────────────────────────────────────────────────────────────────
 
     def _run_ssh(self, commands: list[str]) -> Tuple[bool, str]:
         """Executa comandos via SSH usando exec_command (não interativo)."""
+        # Validar credenciais antes de tentar conectar
+        self._validate_ssh_credentials()
+
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         output_parts = []
 
         try:
-            connect_kwargs = {
-                "hostname": self.host,
-                "port": self.port,
-                "username": self.username,
-                "timeout": self.timeout,
-                "allow_agent": False,
-                "look_for_keys": False,
-            }
-            if self.password:
-                connect_kwargs["password"] = self.password
-            if self.private_key:
-                import io
-                key_file = io.StringIO(self.private_key)
-                try:
-                    connect_kwargs["pkey"] = paramiko.RSAKey.from_private_key(key_file)
-                except Exception:
-                    try:
-                        key_file.seek(0)
-                        connect_kwargs["pkey"] = paramiko.Ed25519Key.from_private_key(key_file)
-                    except Exception:
-                        pass
-
+            connect_kwargs = self._build_ssh_connect_kwargs()
             client.connect(**connect_kwargs)
 
             for cmd in commands:
@@ -107,6 +154,8 @@ class CommandRunner:
             return False, "Falha na autenticação SSH. Verifique usuário/senha."
         except paramiko.SSHException as e:
             return False, f"Erro SSH: {str(e)}"
+        except ValueError as e:
+            return False, str(e)
         except Exception as e:
             return False, f"Erro de conexão SSH: {str(e)}"
         finally:
@@ -120,28 +169,14 @@ class CommandRunner:
         Executa comandos via SSH em modo interativo (shell).
         Útil para dispositivos que não suportam exec_command (ex: Huawei, ZTE).
         """
+        # Validar credenciais antes de tentar conectar
+        self._validate_ssh_credentials()
+
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         try:
-            connect_kwargs = {
-                "hostname": self.host,
-                "port": self.port,
-                "username": self.username,
-                "timeout": self.timeout,
-                "allow_agent": False,
-                "look_for_keys": False,
-            }
-            if self.password:
-                connect_kwargs["password"] = self.password
-            if self.private_key:
-                import io
-                key_file = io.StringIO(self.private_key)
-                try:
-                    connect_kwargs["pkey"] = paramiko.RSAKey.from_private_key(key_file)
-                except Exception:
-                    pass
-
+            connect_kwargs = self._build_ssh_connect_kwargs()
             client.connect(**connect_kwargs)
             channel = client.invoke_shell(term="vt100", width=220, height=50)
             channel.settimeout(2.0)
@@ -177,6 +212,8 @@ class CommandRunner:
 
         except paramiko.AuthenticationException:
             return False, "Falha na autenticação SSH. Verifique usuário/senha."
+        except ValueError as e:
+            return False, str(e)
         except Exception as e:
             return False, f"Erro SSH interativo: {str(e)}"
         finally:

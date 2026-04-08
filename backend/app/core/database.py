@@ -102,6 +102,17 @@ async def _run_migrations(conn):
         "ALTER TABLE playbook_executions ALTER COLUMN status TYPE VARCHAR(50) USING status::text",
         "ALTER TABLE ai_provider_configs ALTER COLUMN provider TYPE VARCHAR(50) USING provider::text",
         "ALTER TABLE ai_analyses ALTER COLUMN status TYPE VARCHAR(50) USING status::text",
+        # ── Audit logs: adicionar colunas faltantes para auditoria completa ──
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS old_values JSONB",
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS new_values JSONB",
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS error_message TEXT",
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS extra_data JSONB",
+        # Índices adicionais para audit_logs
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_status ON audit_logs(status)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_device_id ON audit_logs(device_id)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_resource_type ON audit_logs(resource_type)",
+        # Garantir FK de audit_logs.device_id para devices
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='audit_logs_device_id_fkey' AND table_name='audit_logs') THEN ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_device_id_fkey FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL; END IF; END $$",
     ]
     for sql in migrations:
         try:

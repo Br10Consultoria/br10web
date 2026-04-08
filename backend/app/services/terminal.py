@@ -43,6 +43,24 @@ class SSHTerminalSession:
 
     def connect(self) -> bool:
         """Estabelece conexão SSH."""
+        # ── Validação prévia de credenciais ──────────────────────────────────
+        # Verificar se há pelo menos um método de autenticação disponível
+        # antes de tentar conectar para evitar "No authentication methods available"
+        has_password = bool(self.password and str(self.password).strip())
+        has_key = bool(self.private_key and str(self.private_key).strip())
+
+        if not has_password and not has_key:
+            raise ValueError(
+                "Nenhuma credencial de autenticação configurada para este dispositivo. "
+                "Cadastre a senha ou chave SSH privada nas configurações do dispositivo."
+            )
+
+        if not self.username or not str(self.username).strip():
+            raise ValueError(
+                "Nome de usuário não configurado para este dispositivo. "
+                "Cadastre o usuário nas configurações do dispositivo."
+            )
+
         try:
             self.client = paramiko.SSHClient()
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -56,21 +74,35 @@ class SSHTerminalSession:
                 "look_for_keys": False,
             }
 
-            if self.private_key:
+            # Adicionar chave privada se disponível
+            if has_key:
                 import io
                 key_file = io.StringIO(self.private_key)
+                pkey = None
+                # Tentar RSA
                 try:
                     pkey = paramiko.RSAKey.from_private_key(key_file)
-                    connect_kwargs["pkey"] = pkey
                 except Exception:
+                    pass
+                # Tentar Ed25519
+                if pkey is None:
                     try:
                         key_file.seek(0)
                         pkey = paramiko.Ed25519Key.from_private_key(key_file)
-                        connect_kwargs["pkey"] = pkey
                     except Exception:
                         pass
+                # Tentar ECDSA
+                if pkey is None:
+                    try:
+                        key_file.seek(0)
+                        pkey = paramiko.ECDSAKey.from_private_key(key_file)
+                    except Exception:
+                        pass
+                if pkey:
+                    connect_kwargs["pkey"] = pkey
 
-            if self.password:
+            # Adicionar senha se disponível
+            if has_password:
                 connect_kwargs["password"] = self.password
 
             self.client.connect(**connect_kwargs)
@@ -82,17 +114,24 @@ class SSHTerminalSession:
             )
             self.channel.settimeout(0.1)
             self.connected = True
-            logger.info(f"SSH conectado: {self.host}:{self.port}")
+            logger.info(f"SSH conectado: {self.host}:{self.port} (usuário: {self.username})")
             return True
 
-        except paramiko.AuthenticationException:
-            logger.error(f"SSH auth falhou: {self.host}")
-            raise ValueError("Falha na autenticação SSH. Verifique usuário/senha.")
+        except paramiko.AuthenticationException as e:
+            logger.error(f"SSH auth falhou: {self.host} - {e}")
+            raise ValueError(
+                "Falha na autenticação SSH. Verifique usuário e senha/chave do dispositivo."
+            )
         except paramiko.SSHException as e:
             logger.error(f"SSH erro: {e}")
             raise ValueError(f"Erro SSH: {str(e)}")
         except socket.timeout:
             raise ValueError(f"Timeout ao conectar em {self.host}:{self.port}")
+        except ConnectionRefusedError:
+            raise ValueError(f"Conexão recusada em {self.host}:{self.port} — verifique se o SSH está ativo.")
+        except OSError as e:
+            logger.error(f"SSH OSError: {e}")
+            raise ValueError(f"Erro de rede ao conectar em {self.host}:{self.port}: {str(e)}")
         except Exception as e:
             logger.error(f"SSH conexão falhou: {e}")
             raise ValueError(f"Erro de conexão: {str(e)}")
@@ -185,7 +224,7 @@ class TelnetTerminalSession:
         except socket.timeout:
             raise ValueError(f"Timeout ao conectar em {self.host}:{self.port}")
         except ConnectionRefusedError:
-            raise ValueError(f"Conexão recusada em {self.host}:{self.port}")
+            raise ValueError(f"Conexão recusada em {self.host}:{self.port} — verifique se o Telnet está ativo.")
         except Exception as e:
             raise ValueError(f"Erro Telnet: {str(e)}")
 

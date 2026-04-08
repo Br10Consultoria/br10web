@@ -17,6 +17,7 @@ from app.core.database import get_db
 from app.core.security import decrypt_field
 from app.api.v1.auth import get_current_user
 from app.models.automation import CommandTemplate, CommandExecution, CommandCategory, ExecutionStatus
+from app.models.audit import AuditLog, AuditAction
 from app.models.device import Device
 from app.models.user import User
 
@@ -276,6 +277,7 @@ async def delete_command(
 @router.post("/execute", response_model=dict)
 async def execute_command(
     data: ExecuteCommandRequest,
+    request: "Request" = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -283,6 +285,7 @@ async def execute_command(
     Executa um comando em um dispositivo via SSH ou Telnet.
     Retorna a saída completa do comando.
     """
+    from fastapi import Request
     from app.services.command_runner import CommandRunner
 
     # Buscar dispositivo
@@ -376,6 +379,38 @@ async def execute_command(
 
     await db.commit()
     await db.refresh(execution)
+
+    # ── Auditoria de execução de comando ──────────────────────────────────────
+    audit_action = AuditAction.COMMAND_EXECUTED if success else AuditAction.COMMAND_FAILED
+    audit_status = "success" if success else "failure"
+    try:
+        await db.execute(
+            AuditLog.__table__.insert().values(
+                action=audit_action,
+                description=(
+                    f"Comando '{data.command[:80]}{'...' if len(data.command) > 80 else ''}' "
+                    f"executado em {device.name} ({device.management_ip}) "
+                    f"via {protocol.upper()} por {current_user.username}"
+                ),
+                status=audit_status,
+                user_id=current_user.id,
+                device_id=device.id,
+                resource_type="automation",
+                resource_id=str(execution.id),
+                error_message=execution.error_message if not success else None,
+                extra_data={
+                    "command": data.command,
+                    "protocol": protocol.upper(),
+                    "interactive": data.interactive,
+                    "duration_ms": execution.duration_ms,
+                    "template_name": template_name,
+                    "execution_id": str(execution.id),
+                },
+            )
+        )
+        await db.commit()
+    except Exception as audit_err:
+        logger.error(f"Falha ao gravar auditoria de automação: {audit_err}")
 
     return _execution_to_dict(execution)
 
