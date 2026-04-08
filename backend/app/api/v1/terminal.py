@@ -138,7 +138,8 @@ async def terminal_websocket(
     session_start = datetime.now(timezone.utc)
 
     # Buffer para capturar comandos digitados (linha atual)
-    _input_buffer = ""
+    # Usa lista para ser mutável dentro de funções aninhadas sem precisar de nonlocal
+    _input_buffer = [""]
 
     try:
         # Descriptografar credenciais
@@ -271,13 +272,12 @@ async def terminal_websocket(
                         await loop.run_in_executor(None, terminal_session.send, data)
 
                         # Capturar comandos completos (quando usuário pressiona Enter)
-                        nonlocal _input_buffer
-                        _input_buffer += data
-                        if "\r" in _input_buffer or "\n" in _input_buffer:
+                        _input_buffer[0] += data
+                        if "\r" in _input_buffer[0] or "\n" in _input_buffer[0]:
                             # Extrair linha do comando
-                            cmd_line = _input_buffer.replace("\r\n", "\n").replace("\r", "\n")
+                            cmd_line = _input_buffer[0].replace("\r\n", "\n").replace("\r", "\n")
                             cmd_line = cmd_line.split("\n")[0].strip()
-                            _input_buffer = ""
+                            _input_buffer[0] = ""
 
                             if cmd_line:
                                 # Auditoria: comando executado no terminal
