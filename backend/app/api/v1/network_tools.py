@@ -523,41 +523,60 @@ async def validate_rpki(
         except Exception as e:
             results["errors"].append(f"RIPE prefix-overview: {str(e)}")
 
-        # ── 2. RIPE Stat — rpki-validation (fonte primária) ─────────────────
+        # ── 2. RIPE Stat — rpki-validation (fonte primária) ─────────────────────────────────
         try:
-            resource = f"AS{origin_asn}/{prefix_str}" if origin_asn else prefix_str
-            roa_url = f"https://stat.ripe.net/data/rpki-validation/data.json?resource={resource}"
+            if origin_asn:
+                # Formato correto da API RIPE: resource=AS{asn}&prefix={prefix}
+                # NÃO usar resource=AS{asn}/{prefix} — a API rejeita esse formato
+                roa_url = (
+                    f"https://stat.ripe.net/data/rpki-validation/data.json"
+                    f"?resource=AS{origin_asn}&prefix={prefix_str}"
+                )
+            else:
+                # Sem ASN: tentar buscar apenas pelo prefixo (pode não retornar status)
+                roa_url = (
+                    f"https://stat.ripe.net/data/rpki-validation/data.json"
+                    f"?resource={prefix_str}"
+                )
+
             resp = await client.get(roa_url)
             if resp.status_code == 200:
-                data = resp.json().get("data", {})
-                validating_roas = data.get("validating_roas", [])
-                status = data.get("status", "")
-
-                # Mapeia status do RIPE para nosso padrão
-                status_map = {
-                    "valid": "valid",
-                    "invalid": "invalid",
-                    "unknown": "not-found",
-                    "not-found": "not-found",
-                }
-                if status:
-                    results["rpki_status"] = status_map.get(status.lower(), "not-found")
-                elif validating_roas:
-                    # Determina pelo primeiro ROA
-                    first = validating_roas[0].get("validity", "unknown").lower()
-                    results["rpki_status"] = status_map.get(first, "not-found")
+                ripe_json = resp.json()
+                # Verificar se a API retornou erro (status_code 400 dentro do JSON)
+                if ripe_json.get("status_code") == 400 or ripe_json.get("status") == "error":
+                    results["errors"].append(
+                        f"RIPE rpki-validation: {ripe_json.get('messages', [['', 'Erro desconhecido']])[0][1]}"
+                    )
                 else:
-                    results["rpki_status"] = "not-found"
+                    data = ripe_json.get("data", {})
+                    validating_roas = data.get("validating_roas", [])
+                    ripe_status = data.get("status", "")
 
-                for roa in validating_roas:
-                    results["roas"].append({
-                        "asn": roa.get("origin"),
-                        "prefix": roa.get("prefix"),
-                        "max_length": roa.get("max_length"),
-                        "validity": roa.get("validity"),
-                        "match": roa.get("validity", "").lower() == "valid",
-                    })
-                results["sources_checked"].append("RIPE rpki-validation")
+                    # Mapeia status do RIPE para nosso padrão
+                    status_map = {
+                        "valid": "valid",
+                        "invalid": "invalid",
+                        "unknown": "not-found",
+                        "not-found": "not-found",
+                    }
+                    if ripe_status:
+                        results["rpki_status"] = status_map.get(ripe_status.lower(), "not-found")
+                    elif validating_roas:
+                        # Determina pelo primeiro ROA
+                        first = validating_roas[0].get("validity", "unknown").lower()
+                        results["rpki_status"] = status_map.get(first, "not-found")
+                    else:
+                        results["rpki_status"] = "not-found"
+
+                    for roa in validating_roas:
+                        results["roas"].append({
+                            "asn": roa.get("origin"),
+                            "prefix": roa.get("prefix"),
+                            "max_length": roa.get("max_length"),
+                            "validity": roa.get("validity"),
+                            "match": roa.get("validity", "").lower() == "valid",
+                        })
+                    results["sources_checked"].append("RIPE rpki-validation")
         except Exception as e:
             results["errors"].append(f"RIPE rpki-validation: {str(e)}")
 

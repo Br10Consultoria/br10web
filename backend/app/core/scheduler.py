@@ -104,9 +104,12 @@ async def run_device_status_check():
 
     try:
         async with AsyncSessionLocal() as db:
-            # Busca todos os dispositivos que não estão em manutenção
+            # Busca apenas dispositivos ativos que não estão em manutenção
             result = await db.execute(
-                select(Device).where(Device.status != DeviceStatus.MAINTENANCE)
+                select(Device).where(
+                    Device.is_active == True,  # noqa: E712
+                    Device.status != DeviceStatus.MAINTENANCE
+                )
             )
             devices = result.scalars().all()
 

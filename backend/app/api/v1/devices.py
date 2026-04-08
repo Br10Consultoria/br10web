@@ -103,16 +103,33 @@ async def get_device_stats(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Retorna estatísticas gerais dos dispositivos."""
-    total = await db.scalar(select(func.count(Device.id)))
-    online = await db.scalar(select(func.count(Device.id)).where(Device.status == DeviceStatus.ONLINE))
-    offline = await db.scalar(select(func.count(Device.id)).where(Device.status == DeviceStatus.OFFLINE))
-    maintenance = await db.scalar(select(func.count(Device.id)).where(Device.status == DeviceStatus.MAINTENANCE))
+    """Retorna estatísticas gerais dos dispositivos (apenas dispositivos ativos)."""
+    # Filtrar apenas dispositivos ativos (is_active=True) para consistência
+    # O scheduler também só verifica dispositivos ativos
+    active_filter = Device.is_active == True  # noqa: E712
 
-    # Por tipo
+    total = await db.scalar(
+        select(func.count(Device.id)).where(active_filter)
+    )
+    online = await db.scalar(
+        select(func.count(Device.id)).where(active_filter, Device.status == DeviceStatus.ONLINE)
+    )
+    offline = await db.scalar(
+        select(func.count(Device.id)).where(active_filter, Device.status == DeviceStatus.OFFLINE)
+    )
+    maintenance = await db.scalar(
+        select(func.count(Device.id)).where(active_filter, Device.status == DeviceStatus.MAINTENANCE)
+    )
+    unknown = await db.scalar(
+        select(func.count(Device.id)).where(active_filter, Device.status == DeviceStatus.UNKNOWN)
+    )
+
+    # Por tipo (apenas ativos)
     type_counts = {}
     for dtype in DeviceType:
-        count = await db.scalar(select(func.count(Device.id)).where(Device.device_type == dtype))
+        count = await db.scalar(
+            select(func.count(Device.id)).where(active_filter, Device.device_type == dtype)
+        )
         type_counts[dtype.value] = count
 
     return {
@@ -120,7 +137,7 @@ async def get_device_stats(
         "online": online,
         "offline": offline,
         "maintenance": maintenance,
-        "unknown": total - online - offline - maintenance,
+        "unknown": unknown,
         "by_type": type_counts,
     }
 
