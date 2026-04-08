@@ -72,10 +72,22 @@ ALLOWED_PREFIXES = (
 )
 
 BLOCKED_KEYWORDS = (
-    "system-view", "config", "configure", "commit", "save",
-    "undo ", "set ", "delete ", "reset ", "reboot", "shutdown",
-    "interface ", "vlan ", "ip route", "bgp ", "ospf ",
-    "no ", "write ", "copy ", "erase ", "format ",
+    # Comandos que alteram configuração — NUNCA devem aparecer como início de comando
+    # Nota: NÃO bloqueamos 'config', 'configure', 'interface', 'bgp', 'ospf', 'vlan'
+    # pois aparecem como argumentos de comandos display legítimos:
+    #   display current-configuration
+    #   display interface GigabitEthernet0/0/1
+    #   display bgp summary
+    #   display ospf peer
+    #   display access-user username <x> verbose
+    "system-view",
+    "commit",
+    "save",
+    "reboot",
+    "shutdown",
+    "write ",
+    "erase ",
+    "format ",
 )
 
 

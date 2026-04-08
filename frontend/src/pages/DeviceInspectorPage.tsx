@@ -11,7 +11,8 @@
  *   - Genérico
  */
 import { useState, useEffect, useRef } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link as RouterLink } from 'react-router-dom'
 import {
   Monitor, Search, RefreshCw, ChevronDown, ChevronRight,
   CheckCircle, XCircle, Loader2, AlertTriangle, Copy,
@@ -19,9 +20,10 @@ import {
   Network, GitBranch, Route, Layers, Cpu, FileText,
   Server, Zap, Plug, BarChart2, Link, Link2, Database,
   Shield, Globe, Share2, GitMerge, Lock, Plus, X,
-  Clock, Activity, Eye,
+  Clock, Activity, Eye, Settings,
 } from 'lucide-react'
 import api from '../utils/api'
+import toast from 'react-hot-toast'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -167,6 +169,57 @@ function CommandOutput({ result, index }: { result: CommandResult; index: number
   )
 }
 
+// ─── Componente CategoryCard com tooltip de comandos ────────────────────────
+
+function CategoryCard({
+  catId, cat, selected, onClick
+}: {
+  catId: string
+  cat: { label: string; icon: string; commands: string[] }
+  selected: boolean
+  onClick: () => void
+}) {
+  const [showTooltip, setShowTooltip] = useState(false)
+
+  return (
+    <div className="relative">
+      <button
+        onClick={onClick}
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+        className={`w-full p-3 rounded-lg border text-left transition-all ${
+          selected
+            ? 'bg-blue-600/20 border-blue-500/50 text-white'
+            : 'bg-slate-700/30 border-slate-600 text-slate-300 hover:bg-slate-700/60 hover:border-slate-500'
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <CategoryIcon name={cat.icon} className="w-4 h-4 text-blue-400" />
+          <span className="text-xs font-medium truncate">{cat.label}</span>
+        </div>
+        <div className="text-xs text-slate-500">{cat.commands.length} cmd{cat.commands.length > 1 ? 's' : ''}</div>
+      </button>
+
+      {/* Tooltip com lista de comandos */}
+      {showTooltip && cat.commands.length > 0 && (
+        <div className="absolute z-50 left-0 top-full mt-1 w-80 bg-slate-900 border border-slate-600 rounded-lg shadow-xl p-3">
+          <div className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1">
+            <Terminal className="w-3 h-3 text-blue-400" />
+            Comandos — {cat.label}
+          </div>
+          <div className="space-y-1">
+            {cat.commands.map((cmd, i) => (
+              <div key={i} className="text-xs font-mono text-green-300 bg-slate-800 px-2 py-1 rounded truncate">
+                {cmd}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function DeviceInspectorPage() {
@@ -199,8 +252,30 @@ export default function DeviceInspectorPage() {
   )
 
   // ── Busca catálogo para o dispositivo selecionado ───────────────────────────
-  const { data: catalogData } = useQuery({
-    queryKey: ['inspector-catalog', selectedDevice?.device_type],
+  // Primeiro tenta o catálogo do banco de dados (editável), depois fallback para o embutido
+  const { data: dbCatalogData } = useQuery({
+    queryKey: ['inspector-db-catalog', selectedDevice?.device_type],
+    queryFn: async () => {
+      if (!selectedDevice) return null
+      const res = await api.get('/inspector-commands/catalog', {
+        params: { device_type: selectedDevice.device_type }
+      })
+      const data = res.data as {
+        device_type: string
+        label: string
+        categories: Record<string, { label: string; icon: string; commands: string[] }>
+        source: string
+      }
+      // Se não há categorias no banco, retorna null para usar o catálogo embutido
+      if (!data.categories || Object.keys(data.categories).length === 0) return null
+      return data
+    },
+    enabled: !!selectedDevice,
+    staleTime: 30_000,
+  })
+
+  const { data: builtinCatalogData } = useQuery({
+    queryKey: ['inspector-builtin-catalog', selectedDevice?.device_type],
     queryFn: async () => {
       if (!selectedDevice) return null
       const res = await api.get(`/device-inspector/catalog/${selectedDevice.device_type}`)
@@ -210,8 +285,12 @@ export default function DeviceInspectorPage() {
         categories: Record<string, { label: string; icon: string; commands: string[] }>
       }
     },
-    enabled: !!selectedDevice,
+    enabled: !!selectedDevice && !dbCatalogData,
   })
+
+  // Usa banco de dados se disponível, senão usa catálogo embutido
+  const catalogData = dbCatalogData || builtinCatalogData
+  const catalogSource = dbCatalogData ? 'database' : 'builtin'
 
   // ── Mutation de inspeção ────────────────────────────────────────────────────
   const inspectMut = useMutation<InspectResponse, any, InspectRequest>({
@@ -440,24 +519,39 @@ export default function DeviceInspectorPage() {
                 </div>
               </div>
 
-              {/* Seleção de categoria */}
+                {/* Seleção de categoria */}
               <div className="bg-slate-800 rounded-xl border border-slate-700 p-4">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <Terminal className="w-4 h-4 text-blue-400" />
-                    Selecionar Consulta
-                  </h3>
-                  <button
-                    onClick={() => { setShowCustom(!showCustom); setSelectedCategory('') }}
-                    className={`text-xs px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
-                      showCustom
-                        ? 'bg-purple-500/20 text-purple-400 border-purple-500/40'
-                        : 'text-slate-400 border-slate-600 hover:border-slate-500'
-                    }`}
-                  >
-                    <Plus className="w-3 h-3" />
-                    Comando customizado
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-white flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-blue-400" />
+                      Selecionar Consulta
+                    </h3>
+                    {catalogSource === 'database' && (
+                      <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 px-2 py-0.5 rounded-full">banco de dados</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <RouterLink
+                      to="/inspector-commands"
+                      className="text-xs px-3 py-1.5 rounded-lg border text-slate-400 border-slate-600 hover:border-slate-500 hover:text-white transition-colors flex items-center gap-1"
+                      title="Gerenciar comandos"
+                    >
+                      <Settings className="w-3 h-3" />
+                      Gerenciar
+                    </RouterLink>
+                    <button
+                      onClick={() => { setShowCustom(!showCustom); setSelectedCategory('') }}
+                      className={`text-xs px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
+                        showCustom
+                          ? 'bg-purple-500/20 text-purple-400 border-purple-500/40'
+                          : 'text-slate-400 border-slate-600 hover:border-slate-500'
+                      }`}
+                    >
+                      <Plus className="w-3 h-3" />
+                      Comando customizado
+                    </button>
+                  </div>
                 </div>
 
                 {showCustom ? (
@@ -467,7 +561,8 @@ export default function DeviceInspectorPage() {
                       <Shield className="w-4 h-4 mt-0.5 flex-shrink-0" />
                       <span>
                         Apenas comandos <strong>display</strong> e <strong>show</strong> são permitidos.
-                        Comandos de configuração são bloqueados automaticamente.
+                        Exemplos: <code className="font-mono">display current-configuration</code>, <code className="font-mono">display access-user username X verbose</code>, <code className="font-mono">show running-config</code>.
+                        Comandos de escrita (system-view, commit, save, reboot) são bloqueados.
                       </span>
                     </div>
                     <textarea
@@ -480,25 +575,17 @@ export default function DeviceInspectorPage() {
                     <p className="text-xs text-slate-500">Um comando por linha</p>
                   </div>
                 ) : (
-                  // Grid de categorias
+                  {/* Grid de categorias com tooltip de comandos */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                     {catalogData ? (
                       Object.entries(catalogData.categories).map(([catId, cat]) => (
-                        <button
+                        <CategoryCard
                           key={catId}
+                          catId={catId}
+                          cat={cat}
+                          selected={selectedCategory === catId}
                           onClick={() => setSelectedCategory(catId)}
-                          className={`p-3 rounded-lg border text-left transition-all ${
-                            selectedCategory === catId
-                              ? 'bg-blue-600/20 border-blue-500/50 text-white'
-                              : 'bg-slate-700/30 border-slate-600 text-slate-300 hover:bg-slate-700/60 hover:border-slate-500'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 mb-1">
-                            <CategoryIcon name={cat.icon} className="w-4 h-4 text-blue-400" />
-                            <span className="text-xs font-medium truncate">{cat.label}</span>
-                          </div>
-                          <div className="text-xs text-slate-500">{cat.commands.length} cmd{cat.commands.length > 1 ? 's' : ''}</div>
-                        </button>
+                        />
                       ))
                     ) : (
                       // Fallback com categorias do dispositivo

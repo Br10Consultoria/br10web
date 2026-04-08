@@ -19,6 +19,7 @@ import AIAnalysisPage from './pages/AIAnalysisPage'
 import ClientNetworkPage from './pages/ClientNetworkPage'
 import NetworkToolsPage from './pages/NetworkToolsPage'
 import DeviceInspectorPage from './pages/DeviceInspectorPage'
+import InspectorCommandsPage from './pages/InspectorCommandsPage'
 
 function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
   const { isAuthenticated, user } = useAuthStore()
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="client-network" element={<ClientNetworkPage />} />
           <Route path="network-tools" element={<NetworkToolsPage />} />
           <Route path="device-inspector" element={<DeviceInspectorPage />} />
+          <Route path="inspector-commands" element={<InspectorCommandsPage />} />
           <Route path="vendors" element={<VendorsPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="devices/:id" element={<DeviceDetailPage />} />

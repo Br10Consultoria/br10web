@@ -113,6 +113,23 @@ async def _run_migrations(conn):
         "CREATE INDEX IF NOT EXISTS ix_audit_logs_resource_type ON audit_logs(resource_type)",
         # Garantir FK de audit_logs.device_id para devices
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='audit_logs_device_id_fkey' AND table_name='audit_logs') THEN ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_device_id_fkey FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL; END IF; END $$",
+        # ── Inspector Commands: tabela de comandos editáveis por vendor ──
+        """CREATE TABLE IF NOT EXISTS inspector_commands (
+            id VARCHAR(36) PRIMARY KEY,
+            device_type VARCHAR(50) NOT NULL,
+            category_id VARCHAR(50) NOT NULL,
+            category_label VARCHAR(100) NOT NULL,
+            category_icon VARCHAR(50) NOT NULL DEFAULT 'Terminal',
+            command TEXT NOT NULL,
+            description VARCHAR(255),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by VARCHAR(100),
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_inspector_commands_device_type ON inspector_commands(device_type)",
+        "CREATE INDEX IF NOT EXISTS ix_inspector_commands_device_type_category ON inspector_commands(device_type, category_id)",
     ]
     for sql in migrations:
         try:
