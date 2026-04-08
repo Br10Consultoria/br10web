@@ -575,6 +575,7 @@ export default function DeviceInspectorPage() {
                     <p className="text-xs text-slate-500">Um comando por linha</p>
                   </div>
                 ) : (
+                  <>
                   {/* Grid de categorias com tooltip de comandos */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                     {catalogData ? (
@@ -606,6 +607,7 @@ export default function DeviceInspectorPage() {
                       ))
                     )}
                   </div>
+                  </>
                 )}
 
                 {/* Configurações e botão executar */}
