@@ -5,6 +5,7 @@ Tabelas:
   backup_schedules  — agendamentos cron vinculados a um playbook + lista de dispositivos
   backup_executions — histórico de execuções com logs e status por dispositivo
 """
+import uuid
 from datetime import datetime
 from typing import Optional, List
 import json
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime,
     ForeignKey, Text, JSON, Enum as SAEnum,
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import enum
 
@@ -42,39 +44,39 @@ class BackupSchedule(Base):
     name        = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
 
-    # Playbook a executar
-    playbook_id   = Column(Integer, ForeignKey("playbooks.id", ondelete="SET NULL"), nullable=True)
+    # Playbook a executar — UUID pois playbooks.id é UUID
+    playbook_id   = Column(UUID(as_uuid=True), ForeignKey("playbooks.id", ondelete="SET NULL"), nullable=True)
     playbook_name = Column(String(200), nullable=True)  # cache para exibição
 
     # Dispositivos alvo (lista de IDs armazenada como JSON)
-    device_ids    = Column(JSON, nullable=False, default=list)   # [1, 2, 3]
+    device_ids    = Column(JSON, nullable=False, default=list)   # ["uuid1", "uuid2"]
     device_names  = Column(JSON, nullable=True,  default=list)   # cache ["OLT1", "OLT2"]
 
     # Agendamento cron (ex: "0 0 22 * * *" = todo dia às 22h)
     cron_expression = Column(String(100), nullable=False, default="0 0 22 * * *")
     timezone        = Column(String(50),  nullable=False, default="America/Bahia")
-    status          = Column(SAEnum(BackupScheduleStatus), nullable=False, default=BackupScheduleStatus.ACTIVE)
+    status          = Column(SAEnum(BackupScheduleStatus, name="backupschedulestatus"), nullable=False, default=BackupScheduleStatus.ACTIVE)
 
     # Variáveis extras para o playbook (sobrescreve as do playbook)
     variables_override = Column(JSON, nullable=True, default=dict)
 
     # Notificação Telegram
-    telegram_enabled  = Column(Boolean, nullable=False, default=False)
-    telegram_token    = Column(String(500), nullable=True)
-    telegram_chat_id  = Column(String(100), nullable=True)
-    telegram_on_error = Column(Boolean, nullable=False, default=True)   # notifica só em erro
-    telegram_on_success = Column(Boolean, nullable=False, default=True) # notifica em sucesso
+    telegram_enabled    = Column(Boolean, nullable=False, default=False)
+    telegram_token      = Column(String(500), nullable=True)
+    telegram_chat_id    = Column(String(100), nullable=True)
+    telegram_on_error   = Column(Boolean, nullable=False, default=True)
+    telegram_on_success = Column(Boolean, nullable=False, default=True)
 
     # Retenção de arquivos de backup (dias)
     retention_days = Column(Integer, nullable=False, default=30)
 
-    # Metadados
-    created_by  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Metadados — created_by é UUID pois users.id é UUID
+    created_by  = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at  = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_run_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True)
-    last_status = Column(SAEnum(BackupRunStatus), nullable=True)
+    last_status = Column(SAEnum(BackupRunStatus, name="backuprunstatus"), nullable=True)
 
     # Relacionamentos
     executions = relationship("BackupExecution", back_populates="schedule", cascade="all, delete-orphan")
@@ -89,28 +91,28 @@ class BackupExecution(Base):
     id          = Column(Integer, primary_key=True, index=True)
     schedule_id = Column(Integer, ForeignKey("backup_schedules.id", ondelete="CASCADE"), nullable=False)
 
-    # Quem disparou (None = agendamento automático)
-    triggered_by      = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Quem disparou — UUID pois users.id é UUID
+    triggered_by      = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     triggered_by_name = Column(String(200), nullable=True)
     trigger_type      = Column(String(20), nullable=False, default="scheduled")  # scheduled | manual
 
-    status     = Column(SAEnum(BackupRunStatus), nullable=False, default=BackupRunStatus.PENDING)
-    started_at = Column(DateTime, nullable=True)
+    status      = Column(SAEnum(BackupRunStatus, name="backuprunstatus"), nullable=False, default=BackupRunStatus.PENDING)
+    started_at  = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     duration_ms = Column(Integer, nullable=True)
 
-    # Resultados por dispositivo: [{device_id, device_name, status, error, output_file, duration_ms}]
+    # Resultados por dispositivo: [{device_id, device_name, status, error, output_file, duration_ms, step_logs}]
     device_results = Column(JSON, nullable=True, default=list)
 
     # Resumo
-    total_devices   = Column(Integer, nullable=False, default=0)
-    success_count   = Column(Integer, nullable=False, default=0)
-    failure_count   = Column(Integer, nullable=False, default=0)
-    error_message   = Column(Text, nullable=True)
+    total_devices = Column(Integer, nullable=False, default=0)
+    success_count = Column(Integer, nullable=False, default=0)
+    failure_count = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
 
     # Telegram: foi enviada notificação?
-    telegram_sent   = Column(Boolean, nullable=False, default=False)
-    telegram_error  = Column(Text, nullable=True)
+    telegram_sent  = Column(Boolean, nullable=False, default=False)
+    telegram_error = Column(Text, nullable=True)
 
     # Relacionamentos
     schedule = relationship("BackupSchedule", back_populates="executions")
