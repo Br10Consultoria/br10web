@@ -100,6 +100,20 @@ app.add_middleware(
     expose_headers=["X-Total-Count", "X-Page", "X-Per-Page"],
 )
 
+# ─── Debug Auth Middleware (temporário) ─────────────────────────────────────
+@app.middleware("http")
+async def debug_auth_headers(request: Request, call_next):
+    """Middleware temporário de diagnóstico — loga headers de auth."""
+    path = request.url.path
+    if any(p in path for p in ["/device-backup", "/devices", "/playbooks"]):
+        auth = request.headers.get("authorization", "*** AUSENTE ***")
+        auth_preview = auth[:40] + "..." if len(auth) > 40 else auth
+        logger.warning(f"[DEBUG-AUTH] {request.method} {path} | Authorization: {auth_preview}")
+    response = await call_next(request)
+    if any(p in path for p in ["/device-backup", "/devices", "/playbooks"]):
+        logger.warning(f"[DEBUG-AUTH] -> Status: {response.status_code}")
+    return response
+
 # Security headers middleware
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
