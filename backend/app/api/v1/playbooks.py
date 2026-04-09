@@ -28,6 +28,7 @@ from app.models.device import Device
 from app.models.user import User
 from app.services.playbook_runner import PlaybookRunner
 from app.services.ai_analyzer import analyze_with_ai, SYSTEM_PROMPTS, PROVIDER_MODELS as AI_PROVIDERS
+from app.services.script_importer import import_script_to_playbook
 
 logger = logging.getLogger(__name__)
 
@@ -547,6 +548,90 @@ async def get_step_types(current_user: User = Depends(get_current_user)):
             "params": [],
         },
     ]
+
+
+# ─── Import de Script → Playbook ────────────────────────────────────────────
+
+@playbooks_router.post("/import-script", status_code=status.HTTP_200_OK)
+async def preview_import_script(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Recebe um script (.py, .sh, .bash, .expect, .txt) e retorna
+    a estrutura de playbook convertida para revisão antes de salvar.
+    NÃO persiste no banco — apenas retorna o preview.
+    """
+    # Validar extensão
+    allowed_exts = {'.py', '.sh', '.bash', '.expect', '.tcl', '.txt', '.exp'}
+    filename = file.filename or 'script.txt'
+    ext = '.' + filename.rsplit('.', 1)[-1].lower() if '.' in filename else '.txt'
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Extensão '{ext}' não suportada. Use: {', '.join(sorted(allowed_exts))}"
+        )
+
+    # Ler conteúdo (limite 500KB)
+    content_bytes = await file.read()
+    if len(content_bytes) > 512_000:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande. Limite: 500KB.")
+
+    try:
+        content = content_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            content = content_bytes.decode('latin-1')
+        except Exception:
+            raise HTTPException(status_code=400, detail="Não foi possível decodificar o arquivo. Use UTF-8 ou Latin-1.")
+
+    # Converter script → playbook
+    result = import_script_to_playbook(content, filename=filename)
+    return result
+
+
+@playbooks_router.post("/import-script/save", status_code=status.HTTP_201_CREATED)
+async def save_imported_playbook(
+    data: PlaybookCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Salva o playbook importado (após revisão pelo usuário).
+    Usa o mesmo endpoint de criação padrão mas com rota semântica.
+    """
+    pb = Playbook(
+        name=data.name,
+        description=data.description,
+        category=data.category,
+        variables=data.variables,
+        schedule_cron=data.schedule_cron,
+        schedule_enabled=data.schedule_enabled,
+        created_by=current_user.id,
+    )
+    db.add(pb)
+    await db.flush()
+
+    for step_data in data.steps:
+        step = PlaybookStep(
+            playbook_id=pb.id,
+            order=step_data.order,
+            step_type=step_data.step_type,
+            params=step_data.params,
+            label=step_data.label,
+            on_error=step_data.on_error,
+        )
+        db.add(step)
+
+    await db.commit()
+
+    result = await db.execute(
+        select(Playbook)
+        .options(selectinload(Playbook.steps))
+        .where(Playbook.id == pb.id)
+    )
+    pb = result.scalar_one()
+    return _playbook_to_dict(pb)
 
 
 # ─── AI Provider Config ───────────────────────────────────────────────────────

@@ -5,7 +5,8 @@ import {
   CheckCircle, XCircle, Clock, Loader2, Terminal,
   Download, AlertTriangle, Info, Copy, ArrowUp, ArrowDown,
   Zap, List, History, Settings2, X, Save, RefreshCw,
-  FileText, Server, User as UserIcon,
+  FileText, Server, User as UserIcon, Upload, FileCode,
+  CheckCheck, Eye, Wifi, WifiOff,
 } from 'lucide-react';
 import api from '../utils/api';
 
@@ -77,6 +78,14 @@ const playbooksApi = {
   executions: (id: string) => api.get(`/playbooks/${id}/executions`).then(r => r.data),
   allExecutions: () => api.get('/playbooks/executions/all').then(r => r.data),
   stepTypes: () => api.get('/playbooks/meta/step-types').then(r => r.data),
+  importScript: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post('/playbooks/import-script', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data);
+  },
+  saveImported: (data: any) => api.post('/playbooks/import-script/save', data).then(r => r.data),
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -475,6 +484,368 @@ function PlaybookFormModal({
   );
 }
 
+// ─── Import Script Modal ──────────────────────────────────────────────────
+
+const STEP_TYPE_ICONS: Record<string, React.ReactNode> = {
+  telnet_connect: <WifiOff className="w-3.5 h-3.5 text-orange-400" />,
+  ssh_connect: <Wifi className="w-3.5 h-3.5 text-blue-400" />,
+  disconnect: <X className="w-3.5 h-3.5 text-gray-400" />,
+  send_command: <Terminal className="w-3.5 h-3.5 text-green-400" />,
+  wait_for: <Clock className="w-3.5 h-3.5 text-yellow-400" />,
+  send_string: <FileText className="w-3.5 h-3.5 text-purple-400" />,
+  ftp_download: <Download className="w-3.5 h-3.5 text-cyan-400" />,
+  sleep: <Clock className="w-3.5 h-3.5 text-gray-400" />,
+  log: <Info className="w-3.5 h-3.5 text-blue-300" />,
+};
+
+interface ImportPreview {
+  name: string;
+  description: string;
+  category: string;
+  variables: Record<string, string>;
+  steps: PlaybookStep[];
+  warnings: string[];
+  protocol: string;
+  total_steps: number;
+}
+
+function ImportScriptModal({
+  stepTypes,
+  onClose,
+  onImported,
+}: {
+  stepTypes: StepTypeMeta[];
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [phase, setPhase] = useState<'upload' | 'preview' | 'saving'>('upload');
+  const [dragging, setDragging] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  // Campos editáveis do preview
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState('backup');
+  const [variables, setVariables] = useState<{ key: string; value: string }[]>([]);
+  const [steps, setSteps] = useState<PlaybookStep[]>([]);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleFile = async (file: File) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const data: ImportPreview = await playbooksApi.importScript(file);
+      setPreview(data);
+      setName(data.name);
+      setDescription(data.description);
+      setCategory(data.category);
+      setVariables(Object.entries(data.variables).map(([k, v]) => ({ key: k, value: v })));
+      setSteps(data.steps);
+      setPhase('preview');
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Erro ao processar o script.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  };
+
+  const handleSave = async () => {
+    setPhase('saving');
+    try {
+      const varsObj: Record<string, string> = {};
+      variables.forEach(v => { if (v.key.trim()) varsObj[v.key.trim()] = v.value; });
+      await playbooksApi.saveImported({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        category,
+        variables: varsObj,
+        steps: steps.map((s, i) => ({ ...s, order: i })),
+      });
+      onImported();
+      onClose();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Erro ao salvar playbook.');
+      setPhase('preview');
+    }
+  };
+
+  const updateStep = (index: number, s: PlaybookStep) => {
+    const updated = [...steps];
+    updated[index] = s;
+    setSteps(updated);
+  };
+
+  const deleteStep = (index: number) => {
+    setSteps(steps.filter((_, i) => i !== index).map((s, i) => ({ ...s, order: i })));
+  };
+
+  const moveStep = (index: number, dir: 'up' | 'down') => {
+    const updated = [...steps];
+    const target = dir === 'up' ? index - 1 : index + 1;
+    [updated[index], updated[target]] = [updated[target], updated[index]];
+    setSteps(updated.map((s, i) => ({ ...s, order: i })));
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-[#0d1b35] border border-[#2a3a5c] rounded-xl w-full max-w-3xl max-h-[92vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-[#2a3a5c]">
+          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+            <Upload className="w-5 h-5 text-purple-400" />
+            Importar Script como Playbook
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Steps indicator */}
+        <div className="flex items-center gap-0 px-4 py-2 border-b border-[#2a3a5c] bg-[#0a1628]">
+          {[{id:'upload',label:'1. Upload'},{id:'preview',label:'2. Revisar'},{id:'saving',label:'3. Salvar'}].map((s, i) => (
+            <React.Fragment key={s.id}>
+              <div className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full ${
+                phase === s.id ? 'bg-blue-600 text-white' :
+                (phase === 'preview' && s.id === 'upload') || phase === 'saving' ? 'text-green-400' : 'text-gray-500'
+              }`}>
+                {((phase === 'preview' && s.id === 'upload') || phase === 'saving') && s.id !== 'saving'
+                  ? <CheckCheck className="w-3 h-3" /> : null}
+                {s.label}
+              </div>
+              {i < 2 && <div className="w-8 h-px bg-[#2a3a5c] mx-1" />}
+            </React.Fragment>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-4">
+
+          {/* FASE 1: Upload */}
+          {phase === 'upload' && (
+            <div className="space-y-4">
+              <div
+                onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all ${
+                  dragging ? 'border-purple-400 bg-purple-900/20' : 'border-[#2a3a5c] hover:border-purple-500 hover:bg-purple-900/10'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".py,.sh,.bash,.expect,.exp,.tcl,.txt"
+                  className="hidden"
+                  onChange={e => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }}
+                />
+                {loading ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
+                    <p className="text-gray-300 text-sm">Analisando script...</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-3">
+                    <FileCode className="w-12 h-12 text-purple-400 opacity-70" />
+                    <div>
+                      <p className="text-white font-medium">Arraste o script aqui ou clique para selecionar</p>
+                      <p className="text-gray-400 text-sm mt-1">Suportado: .py, .sh, .bash, .expect, .exp, .tcl, .txt</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {error && (
+                <div className="flex items-start gap-2 bg-red-900/20 border border-red-700 rounded-lg p-3 text-sm text-red-400">
+                  <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  {error}
+                </div>
+              )}
+
+              {/* Guia de formatos */}
+              <div className="bg-[#0a1628] border border-[#1a2a4a] rounded-lg p-4 space-y-2">
+                <p className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5 text-blue-400" /> O que o importador detecta automaticamente:
+                </p>
+                <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                  <div className="flex items-center gap-1.5"><Wifi className="w-3 h-3 text-blue-400" /> Conexão SSH / Telnet</div>
+                  <div className="flex items-center gap-1.5"><Terminal className="w-3 h-3 text-green-400" /> Envio de comandos</div>
+                  <div className="flex items-center gap-1.5"><Clock className="w-3 h-3 text-yellow-400" /> Aguardar prompts / strings</div>
+                  <div className="flex items-center gap-1.5"><Download className="w-3 h-3 text-cyan-400" /> Download FTP</div>
+                  <div className="flex items-center gap-1.5"><FileText className="w-3 h-3 text-purple-400" /> Variáveis (HOST, USER, PASS...)</div>
+                  <div className="flex items-center gap-1.5"><Clock className="w-3 h-3 text-gray-400" /> Sleep / delays</div>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Compativel com: Python (telnetlib, paramiko, netmiko, pexpect), Shell/Bash, Expect/TCL
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* FASE 2: Preview e edição */}
+          {phase === 'preview' && preview && (
+            <div className="space-y-4">
+              {/* Avisos */}
+              {preview.warnings.length > 0 && (
+                <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 space-y-1">
+                  <p className="text-xs font-medium text-yellow-400 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Avisos de conversão
+                  </p>
+                  {preview.warnings.map((w, i) => (
+                    <p key={i} className="text-xs text-yellow-300/80 ml-5">• {w}</p>
+                  ))}
+                </div>
+              )}
+
+              {/* Resumo da detecção */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-[#1a2a4a] rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-white">{preview.total_steps}</div>
+                  <div className="text-xs text-gray-400">Passos detectados</div>
+                </div>
+                <div className="bg-[#1a2a4a] rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-white">{Object.keys(preview.variables).length}</div>
+                  <div className="text-xs text-gray-400">Variáveis</div>
+                </div>
+                <div className="bg-[#1a2a4a] rounded-lg p-3 text-center">
+                  <div className={`text-lg font-bold ${preview.protocol === 'ssh' ? 'text-blue-400' : 'text-orange-400'}`}>
+                    {preview.protocol.toUpperCase()}
+                  </div>
+                  <div className="text-xs text-gray-400">Protocolo</div>
+                </div>
+              </div>
+
+              {/* Campos editáveis */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="block text-xs text-gray-400 mb-1">Nome do Playbook *</label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-3 py-2 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Categoria</label>
+                  <select
+                    value={category}
+                    onChange={e => setCategory(e.target.value)}
+                    className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-3 py-2 text-sm text-white"
+                  >
+                    {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-400 mb-1">Descrição</label>
+                  <input
+                    type="text"
+                    value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-3 py-2 text-sm text-white"
+                  />
+                </div>
+              </div>
+
+              {/* Variáveis detectadas */}
+              {variables.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-gray-300 mb-2">Variáveis detectadas (edite os valores padrão):</p>
+                  <div className="space-y-2">
+                    {variables.map((v, i) => (
+                      <div key={i} className="flex gap-2 items-center">
+                        <span className="w-32 text-xs font-mono text-yellow-300 shrink-0">{v.key}</span>
+                        <span className="text-gray-500">=</span>
+                        <input
+                          type={v.key.toLowerCase().includes('pass') ? 'password' : 'text'}
+                          value={v.value}
+                          onChange={e => {
+                            const updated = [...variables];
+                            updated[i].value = e.target.value;
+                            setVariables(updated);
+                          }}
+                          placeholder={v.key.toLowerCase().includes('pass') ? '(deixe vazio por segurança)' : 'valor padrão'}
+                          className="flex-1 bg-[#1a2a4a] border border-[#2a3a5c] rounded px-2 py-1.5 text-xs text-white font-mono placeholder-gray-600"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Passos detectados */}
+              <div>
+                <p className="text-xs font-medium text-gray-300 mb-2 flex items-center gap-1.5">
+                  <Eye className="w-3.5 h-3.5 text-blue-400" />
+                  Passos detectados — revise e ajuste antes de salvar:
+                </p>
+                <div className="space-y-2">
+                  {steps.map((step, i) => (
+                    <StepEditor
+                      key={i}
+                      step={step}
+                      index={i}
+                      stepTypes={stepTypes}
+                      onChange={s => updateStep(i, s)}
+                      onDelete={() => deleteStep(i)}
+                      onMoveUp={() => moveStep(i, 'up')}
+                      onMoveDown={() => moveStep(i, 'down')}
+                      isFirst={i === 0}
+                      isLast={i === steps.length - 1}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {error && (
+                <div className="flex items-start gap-2 bg-red-900/20 border border-red-700 rounded-lg p-3 text-sm text-red-400">
+                  <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  {error}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* FASE 3: Salvando */}
+          {phase === 'saving' && (
+            <div className="flex flex-col items-center justify-center py-16 gap-4">
+              <Loader2 className="w-10 h-10 text-blue-400 animate-spin" />
+              <p className="text-gray-300">Salvando playbook...</p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-between items-center p-4 border-t border-[#2a3a5c]">
+          <button
+            onClick={() => { if (phase === 'preview') { setPhase('upload'); setPreview(null); setError(null); } else onClose(); }}
+            className="px-4 py-2 text-sm text-gray-400 hover:text-white"
+          >
+            {phase === 'preview' ? '← Voltar' : 'Cancelar'}
+          </button>
+          {phase === 'preview' && (
+            <button
+              onClick={handleSave}
+              disabled={!name.trim() || steps.length === 0}
+              className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" /> Salvar Playbook
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Execute Modal ─────────────────────────────────────────────────────────────
 
 function ExecuteModal({
@@ -710,6 +1081,7 @@ export default function PlaybooksPage() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'playbooks' | 'history'>('playbooks');
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [editingPlaybook, setEditingPlaybook] = useState<Playbook | undefined>();
   const [executingPlaybook, setExecutingPlaybook] = useState<Playbook | undefined>();
   const [searchTerm, setSearchTerm] = useState('');
@@ -773,12 +1145,20 @@ export default function PlaybooksPage() {
             Sequências automatizadas de comandos para backup, configuração e manutenção
           </p>
         </div>
-        <button
-          onClick={() => { setEditingPlaybook(undefined); setShowForm(true); }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium"
-        >
-          <Plus className="w-4 h-4" /> Novo Playbook
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium"
+          >
+            <Upload className="w-4 h-4" /> Importar Script
+          </button>
+          <button
+            onClick={() => { setEditingPlaybook(undefined); setShowForm(true); }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium"
+          >
+            <Plus className="w-4 h-4" /> Novo Playbook
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -936,6 +1316,14 @@ export default function PlaybooksPage() {
           stepTypes={stepTypes}
           onClose={() => { setShowForm(false); setEditingPlaybook(undefined); }}
           onSave={handleSave}
+        />
+      )}
+
+      {showImport && (
+        <ImportScriptModal
+          stepTypes={stepTypes}
+          onClose={() => setShowImport(false)}
+          onImported={() => queryClient.invalidateQueries({ queryKey: ['playbooks'] })}
         />
       )}
 
