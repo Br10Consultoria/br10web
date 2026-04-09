@@ -922,6 +922,9 @@ function ExecuteModal({
     queryFn: () => api.get('/devices', { params: selectedClient ? { client_id: selectedClient } : {} }).then(r => r.data),
   });
 
+  // Variáveis preenchidas automaticamente pelo sistema (não precisam ser editadas)
+  const AUTO_VARS = ['HOST', 'DEVICE_IP', 'USERNAME', 'PASSWORD', 'DEVICE_NAME', 'DATE', 'DATETIME'];
+
   const handleExecute = async () => {
     if (!selectedDevice) return;
     setExecuting(true);
@@ -990,6 +993,7 @@ function ExecuteModal({
                   <select
                     value={selectedDevice}
                     onChange={e => setSelectedDevice(e.target.value)}
+                    // HOST, USERNAME, PASSWORD são preenchidos automaticamente pelo dispositivo selecionado
                     className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-3 py-2 text-sm text-white"
                   >
                     <option value="">Selecione...</option>
@@ -1004,18 +1008,36 @@ function ExecuteModal({
               {varEntries.length > 0 && (
                 <div>
                   <h3 className="text-sm font-medium text-gray-300 mb-2">Variáveis do Playbook</h3>
+
+                  {/* Aviso sobre variáveis automáticas */}
+                  {varEntries.some(([k]) => AUTO_VARS.includes(k)) && (
+                    <div className="mb-2 p-2 bg-blue-900/20 border border-blue-700/40 rounded text-xs text-blue-300 flex items-start gap-2">
+                      <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span>As variáveis <code className="text-blue-200">HOST</code>, <code className="text-blue-200">USERNAME</code>, <code className="text-blue-200">PASSWORD</code> e <code className="text-blue-200">DEVICE_IP</code> são preenchidas automaticamente pelo dispositivo selecionado. Você pode sobrescrever manualmente se necessário.</span>
+                    </div>
+                  )}
+
                   <div className="space-y-2">
-                    {varEntries.map(([key, defaultVal]) => (
-                      <div key={key} className="flex items-center gap-2">
-                        <span className="w-36 text-xs font-mono text-yellow-300 shrink-0">{key}</span>
-                        <input
-                          type={key.toLowerCase().includes('pass') || key.toLowerCase().includes('senha') ? 'password' : 'text'}
-                          value={varOverrides[key] ?? defaultVal}
-                          onChange={e => setVarOverrides(prev => ({ ...prev, [key]: e.target.value }))}
-                          className="flex-1 bg-[#1a2a4a] border border-[#2a3a5c] rounded px-2 py-1.5 text-xs text-white font-mono"
-                        />
-                      </div>
-                    ))}
+                    {varEntries.map(([key, defaultVal]) => {
+                      const isAuto = AUTO_VARS.includes(key);
+                      return (
+                        <div key={key} className="flex items-center gap-2">
+                          <span className={`w-36 text-xs font-mono shrink-0 ${isAuto ? 'text-blue-300' : 'text-yellow-300'}`}>
+                            {key}
+                            {isAuto && <span className="ml-1 text-blue-500 text-[10px]">(auto)</span>}
+                          </span>
+                          <input
+                            type={key.toLowerCase().includes('pass') || key.toLowerCase().includes('senha') ? 'password' : 'text'}
+                            value={varOverrides[key] ?? (isAuto ? (key === 'HOST' || key === 'DEVICE_IP' ? (devices.find((d: any) => d.id === selectedDevice)?.management_ip || '') : '') : defaultVal)}
+                            onChange={e => setVarOverrides(prev => ({ ...prev, [key]: e.target.value }))}
+                            placeholder={isAuto ? `Preenchido automaticamente pelo dispositivo` : ''}
+                            className={`flex-1 bg-[#1a2a4a] border rounded px-2 py-1.5 text-xs text-white font-mono ${
+                              isAuto ? 'border-blue-700/40 text-blue-200 placeholder-blue-700' : 'border-[#2a3a5c]'
+                            }`}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

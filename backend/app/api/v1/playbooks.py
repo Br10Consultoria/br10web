@@ -24,7 +24,8 @@ from app.models.playbook import (
     AIProviderConfig, AIAnalysis, AIAnalysisStatus, AIProvider,
     PlaybookStatus, PlaybookStepType,
 )
-from app.models.device import Device
+from app.models.device import Device, DeviceCredential
+from app.models.audit import AuditLog, AuditAction
 from app.models.user import User
 from app.services.playbook_runner import PlaybookRunner
 from app.services.ai_analyzer import analyze_with_ai, SYSTEM_PROMPTS, PROVIDER_MODELS as AI_PROVIDERS
@@ -364,15 +365,46 @@ async def execute_playbook(
     if not device:
         raise HTTPException(status_code=404, detail="Dispositivo não encontrado.")
 
-    # Descriptografar senha
-    try:
-        password = decrypt_field(device.password) if device.password else ""
-    except Exception:
-        password = device.password or ""
+    # Buscar credencial padrão do dispositivo
+    cred_res = await db.execute(
+        select(DeviceCredential).where(
+            DeviceCredential.device_id == device.id,
+            DeviceCredential.is_active == True,
+        ).order_by(DeviceCredential.id)
+    )
+    credential = cred_res.scalars().first()
+
+    # Descriptografar senha — tenta credencial dedicada primeiro, depois campo direto do device
+    password = ""
+    username = device.username or ""
+    if credential:
+        if credential.password_encrypted:
+            try:
+                password = decrypt_field(credential.password_encrypted)
+            except Exception:
+                password = ""
+        if credential.username:
+            username = credential.username
+    elif device.password_encrypted:
+        try:
+            password = decrypt_field(device.password_encrypted)
+        except Exception:
+            password = ""
 
     # Mesclar variáveis: playbook + override da requisição
+    # HOST, USERNAME, PASSWORD, DEVICE_IP são preenchidos automaticamente pelo dispositivo
     variables = dict(pb.variables or {})
-    variables.update(req.variables_override)
+    auto_vars = {
+        "HOST":        device.management_ip,
+        "DEVICE_IP":   device.management_ip,
+        "USERNAME":    username,
+        "PASSWORD":    password,
+        "DEVICE_NAME": device.name,
+        "DATE":        datetime.utcnow().strftime("%Y-%m-%d"),
+        "DATETIME":    datetime.utcnow().strftime("%Y%m%d_%H%M%S"),
+    }
+    variables.update(auto_vars)
+    variables.update(req.variables_override)  # override manual tem prioridade
 
     # Criar registro de execução
     execution = PlaybookExecution(
@@ -383,7 +415,7 @@ async def execute_playbook(
         device_name=device.name,
         device_ip=device.management_ip,
         client_name=getattr(device, "client_name", "") or "",
-        variables_used=variables,
+        variables_used={k: v for k, v in variables.items() if k not in ("PASSWORD", "password")},
         status=PlaybookRunStatus.RUNNING,
         total_steps=len(pb.steps),
     )
@@ -408,7 +440,7 @@ async def execute_playbook(
             variables=variables,
             device_name=device.name,
             device_ip=device.management_ip,
-            device_username=device.username or "",
+            device_username=username,
             device_password=password,
             device_telnet_port=device.telnet_port or 23,
             device_ssh_port=device.ssh_port or 22,
@@ -428,6 +460,25 @@ async def execute_playbook(
     execution.finished_at = datetime.utcnow()
     execution.current_step = len(result["step_logs"])
 
+    # Registrar na auditoria
+    run_ok = result["status"] == "success"
+    audit = AuditLog(
+        user_id=current_user.id,
+        device_id=device.id,
+        action=AuditAction.COMMAND_EXECUTED if run_ok else AuditAction.COMMAND_FAILED,
+        description=f"Playbook '{pb.name}' executado em {device.name} ({device.management_ip})",
+        status="success" if run_ok else "failure",
+        error_message=result.get("error_message"),
+        extra_data={
+            "playbook_id": str(pb.id),
+            "playbook_name": pb.name,
+            "execution_id": str(execution.id),
+            "device_ip": device.management_ip,
+            "total_steps": len(result.get("step_logs", [])),
+            "duration_ms": result.get("duration_ms"),
+        },
+    )
+    db.add(audit)
     await db.commit()
 
     return _execution_to_dict(execution)
