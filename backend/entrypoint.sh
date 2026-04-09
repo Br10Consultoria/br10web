@@ -49,15 +49,9 @@ async def init_database():
 
         db_url = os.environ.get("DATABASE_URL", "")
 
-        # Importar todos os modelos para registrar no metadata
+        # Importar todos os modelos via __init__.py (registra todos no Base.metadata)
+        import app.models  # noqa: F401 - importa e registra TODOS os modelos
         from app.models.base import Base
-        import app.models.user
-        import app.models.client
-        import app.models.device
-        import app.models.vpn
-        import app.models.audit
-        import app.models.automation
-        import app.models.playbook
 
         engine = create_async_engine(db_url, echo=False)
 
