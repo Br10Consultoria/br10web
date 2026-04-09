@@ -34,6 +34,17 @@ interface Schedule {
   created_at: string;
 }
 
+interface StepLog {
+  step: number;
+  type: string;
+  label: string;
+  status: 'success' | 'error';
+  output?: string;
+  error?: string;
+  duration_ms?: number;
+  timestamp?: string;
+}
+
 interface DeviceResult {
   device_id: number;
   device_name: string;
@@ -41,6 +52,8 @@ interface DeviceResult {
   error?: string;
   duration_ms?: number;
   playbook_execution_id?: number;
+  step_logs?: StepLog[];
+  output_files?: string[];
 }
 
 interface Execution {
@@ -475,21 +488,97 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
 
 // ─── Modal de Detalhes de Execução ────────────────────────────────────────────
 
+const DeviceResultRow: React.FC<{ dr: DeviceResult }> = ({ dr }) => {
+  const [expanded, setExpanded] = React.useState(false);
+  const hasLogs = (dr.step_logs || []).length > 0;
+  const hasFiles = (dr.output_files || []).length > 0;
+
+  return (
+    <div className={`rounded-lg border ${dr.status === 'success' ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
+      <div
+        className="flex items-center justify-between p-3 cursor-pointer"
+        onClick={() => (hasLogs || hasFiles) && setExpanded(e => !e)}
+      >
+        <div className="flex items-center gap-2">
+          <StatusIcon status={dr.status} size={14} />
+          <span className="text-sm text-white font-medium">{dr.device_name}</span>
+          {hasFiles && (
+            <span className="text-xs bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded">
+              {dr.output_files!.length} arquivo(s)
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400">{fmtDuration(dr.duration_ms)}</span>
+          {(hasLogs || hasFiles) && (
+            expanded ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />
+          )}
+        </div>
+      </div>
+      {dr.error && <p className="text-xs text-red-300 px-3 pb-2 ml-5">{dr.error}</p>}
+      {expanded && (
+        <div className="border-t border-gray-700/50 p-3 space-y-2">
+          {/* Arquivos gerados */}
+          {hasFiles && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">Arquivos de Backup</p>
+              {dr.output_files!.map((f, fi) => (
+                <div key={fi} className="flex items-center gap-2 text-xs text-blue-300 bg-blue-500/10 rounded px-2 py-1">
+                  <Database size={10} />
+                  <span className="font-mono">{f.split('/').pop()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Logs por passo */}
+          {hasLogs && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">Log de Passos</p>
+              {dr.step_logs!.map((s, si) => (
+                <div key={si} className={`rounded px-2 py-1.5 text-xs font-mono ${
+                  s.status === 'success' ? 'bg-gray-800 text-gray-300' : 'bg-red-500/10 text-red-300'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <span className={s.status === 'success' ? 'text-green-400' : 'text-red-400'}>
+                      {s.status === 'success' ? '✓' : '✗'}
+                    </span>
+                    <span className="text-gray-400">#{s.step}</span>
+                    <span className="text-white">{s.label}</span>
+                    <span className="ml-auto text-gray-500">{s.duration_ms ? `${s.duration_ms}ms` : ''}</span>
+                  </div>
+                  {s.error && <p className="mt-1 text-red-300 pl-6">{s.error}</p>}
+                  {s.output && s.status === 'success' && (
+                    <p className="mt-1 text-gray-400 pl-6 truncate">{s.output.slice(0, 200)}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ExecutionDetailModal: React.FC<{ execution: Execution; onClose: () => void }> = ({ execution, onClose }) => (
   <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-    <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-xl max-h-[80vh] flex flex-col">
+    <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
       <div className="flex items-center justify-between p-5 border-b border-gray-700">
         <div className="flex items-center gap-3">
           <StatusIcon status={execution.status} size={20} />
           <div>
             <h2 className="font-semibold text-white">{execution.schedule_name || `Execução #${execution.id}`}</h2>
-            <p className="text-xs text-gray-400">{fmtDate(execution.started_at)} — {fmtDuration(execution.duration_ms)}</p>
+            <p className="text-xs text-gray-400">
+              {fmtDate(execution.started_at)} — {fmtDuration(execution.duration_ms)}
+              {execution.trigger_type === 'manual' ? ' · Manual' : ' · Agendado'}
+            </p>
           </div>
         </div>
         <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">×</button>
       </div>
-      <div className="flex-1 overflow-y-auto p-5 space-y-3">
-        <div className="grid grid-cols-3 gap-3">
+      <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        {/* Cards de resumo */}
+        <div className="grid grid-cols-4 gap-3">
           <div className="bg-gray-800 rounded-lg p-3 text-center">
             <p className="text-2xl font-bold text-white">{execution.total_devices}</p>
             <p className="text-xs text-gray-400">Total</p>
@@ -502,34 +591,44 @@ const ExecutionDetailModal: React.FC<{ execution: Execution; onClose: () => void
             <p className="text-2xl font-bold text-red-400">{execution.failure_count}</p>
             <p className="text-xs text-gray-400">Falha</p>
           </div>
+          <div className="bg-gray-800 rounded-lg p-3 text-center">
+            <p className="text-lg font-bold text-white">{fmtDuration(execution.duration_ms)}</p>
+            <p className="text-xs text-gray-400">Duração</p>
+          </div>
         </div>
+
+        {/* Erro geral */}
         {execution.error_message && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-            <p className="text-xs text-red-300">{execution.error_message}</p>
+            <p className="text-xs font-medium text-red-400 mb-1">Erro na execução</p>
+            <p className="text-xs text-red-300 font-mono">{execution.error_message}</p>
           </div>
         )}
+
+        {/* Resultado por dispositivo — expansível com logs */}
         <div className="space-y-2">
-          <p className="text-sm font-medium text-gray-300">Resultado por dispositivo:</p>
-          {(execution.device_results || []).map((dr, i) => (
-            <div key={i} className={`rounded-lg p-3 border ${dr.status === 'success' ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <StatusIcon status={dr.status} size={14} />
-                  <span className="text-sm text-white font-medium">{dr.device_name}</span>
-                </div>
-                <span className="text-xs text-gray-400">{fmtDuration(dr.duration_ms)}</span>
-              </div>
-              {dr.error && <p className="text-xs text-red-300 mt-1 ml-5">{dr.error}</p>}
-            </div>
-          ))}
+          <p className="text-sm font-medium text-gray-300">Resultado por dispositivo</p>
+          {(execution.device_results || []).length === 0 ? (
+            <p className="text-xs text-gray-500 italic">Nenhum dispositivo processado.</p>
+          ) : (
+            (execution.device_results || []).map((dr, i) => (
+              <DeviceResultRow key={i} dr={dr} />
+            ))
+          )}
         </div>
-        {execution.telegram_sent !== undefined && (
-          <div className={`flex items-center gap-2 text-xs p-2 rounded-lg ${execution.telegram_sent ? 'text-green-400 bg-green-500/10' : 'text-gray-400 bg-gray-800'}`}>
-            <Send size={12} />
-            {execution.telegram_sent ? 'Notificação Telegram enviada' : 'Notificação Telegram não enviada'}
-            {execution.telegram_error && <span className="text-red-400">— {execution.telegram_error}</span>}
-          </div>
-        )}
+
+        {/* Status Telegram */}
+        <div className={`flex items-center gap-2 text-xs p-2 rounded-lg ${
+          execution.telegram_sent ? 'text-green-400 bg-green-500/10' : 'text-gray-400 bg-gray-800'
+        }`}>
+          <Send size={12} />
+          {execution.telegram_sent
+            ? 'Notificação Telegram enviada com sucesso'
+            : 'Notificação Telegram não enviada'}
+          {(execution as any).telegram_error && (
+            <span className="text-red-400">— {(execution as any).telegram_error}</span>
+          )}
+        </div>
       </div>
     </div>
   </div>

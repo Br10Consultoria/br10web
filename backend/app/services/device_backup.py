@@ -9,6 +9,7 @@ Responsabilidades:
 """
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -50,7 +51,7 @@ def _build_telegram_message(
     execution: BackupExecution,
     device_results: List[Dict],
 ) -> str:
-    """Monta a mensagem de notificação do Telegram."""
+    """Monta a mensagem de notificação do Telegram com logs detalhados."""
     status_emoji = {
         BackupRunStatus.SUCCESS: "✅",
         BackupRunStatus.PARTIAL: "⚠️",
@@ -71,10 +72,26 @@ def _build_telegram_message(
         icon = "✅" if dr.get("status") == "success" else "❌"
         name = dr.get("device_name", dr.get("device_id", "?"))
         dur  = f" ({dr.get('duration_ms', 0)/1000:.1f}s)" if dr.get("duration_ms") else ""
-        lines.append(f"  {icon} {name}{dur}")
+        lines.append(f"  {icon} <b>{name}</b>{dur}")
+
+        # Arquivos gerados (backup baixado)
+        output_files = dr.get("output_files", [])
+        for f in output_files:
+            filename = os.path.basename(f)
+            lines.append(f"     📂 {filename}")
+
+        # Erro principal
         if dr.get("error") and dr.get("status") != "success":
-            err = str(dr["error"])[:120]
-            lines.append(f"     └ {err}")
+            err = str(dr["error"])[:150]
+            lines.append(f"     ❌ {err}")
+
+        # Logs de passos com erro
+        step_logs = dr.get("step_logs", [])
+        failed_steps = [s for s in step_logs if s.get("status") == "error"]
+        for s in failed_steps[:3]:  # max 3 passos com erro
+            label = s.get("label", s.get("type", "?"))
+            err_msg = (s.get("error") or "")[:100]
+            lines.append(f"     ⚠️ Passo '{label}': {err_msg}")
 
     if execution.error_message:
         lines.append(f"\n⚠️ {execution.error_message[:200]}")
@@ -231,10 +248,6 @@ async def run_backup_schedule(
 
             # Executar em thread (runner é síncrono)
             runner = PlaybookRunner(
-                playbook_id=playbook.id,
-                device_id=device_id,
-                device_ip=device.ip_address,
-                device_name=device.name,
                 steps=[{
                     "step_type": s.step_type,
                     "label": s.label,
@@ -244,22 +257,33 @@ async def run_backup_schedule(
                     "order": s.order,
                 } for s in steps],
                 variables=variables,
-                execution_id=pb_exec.id,
+                device_name=device.name,
+                device_ip=device.ip_address,
+                device_username=username,
+                device_password=password,
+                device_telnet_port=int(device.telnet_port or 23),
+                device_ssh_port=int(device.ssh_port or 22),
+                client_name=getattr(device, 'client_name', '') or '',
             )
 
             loop = asyncio.get_event_loop()
             run_result = await loop.run_in_executor(None, runner.run)
 
             # Atualizar execução do playbook
-            pb_exec.status = PlaybookRunStatus.SUCCESS if run_result["success"] else PlaybookRunStatus.ERROR
+            run_success = run_result.get("status") == "success"
+            pb_exec.status = PlaybookRunStatus.SUCCESS if run_success else PlaybookRunStatus.ERROR
             pb_exec.step_logs = run_result.get("step_logs", [])
             pb_exec.output_files = run_result.get("output_files", [])
             pb_exec.error_message = run_result.get("error_message")
             pb_exec.finished_at = datetime.utcnow()
             pb_exec.duration_ms = int((time.time() - dev_start) * 1000)
-            pb_exec.current_step = run_result.get("current_step", len(steps))
+            pb_exec.current_step = len(run_result.get("step_logs", []))
 
-            if run_result["success"]:
+            # Guardar logs e arquivos no resultado do dispositivo
+            dev_result["step_logs"] = run_result.get("step_logs", [])
+            dev_result["output_files"] = run_result.get("output_files", [])
+
+            if run_success:
                 dev_result["status"] = "success"
                 success_count += 1
                 # Atualizar last_backup no dispositivo
