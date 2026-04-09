@@ -21,7 +21,7 @@ from sqlalchemy import select
 from app.models.backup_schedule import BackupSchedule, BackupExecution, BackupRunStatus
 from app.models.device import Device, DeviceCredential
 from app.models.playbook import Playbook, PlaybookExecution, PlaybookRunStatus
-from app.core.security import decrypt_value
+from app.core.security import decrypt_field as decrypt_value
 
 logger = logging.getLogger(__name__)
 
