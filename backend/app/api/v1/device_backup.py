@@ -226,7 +226,7 @@ async def create_schedule(
     # Auditoria
     db.add(AuditLog(
         user_id=current_user.id,
-        action=AuditAction.CREATE,
+        action=AuditAction.BACKUP_CREATED,
         resource_type="backup_schedule",
         resource_id=str(schedule.id),
         description=f"Agendamento de backup criado: {schedule.name}",
@@ -301,7 +301,7 @@ async def update_schedule(
 
     db.add(AuditLog(
         user_id=current_user.id,
-        action=AuditAction.UPDATE,
+        action=AuditAction.BACKUP_CREATED,
         resource_type="backup_schedule",
         resource_id=str(schedule_id),
         description=f"Agendamento de backup atualizado: {schedule.name}",
@@ -329,7 +329,7 @@ async def delete_schedule(
     name = schedule.name
     db.add(AuditLog(
         user_id=current_user.id,
-        action=AuditAction.DELETE,
+        action=AuditAction.EXPORT_DATA,
         resource_type="backup_schedule",
         resource_id=str(schedule_id),
         description=f"Agendamento de backup removido: {name}",
@@ -368,7 +368,7 @@ async def run_schedule_now(
     db.add(execution)
     db.add(AuditLog(
         user_id=current_user.id,
-        action=AuditAction.EXECUTE,
+        action=AuditAction.BACKUP_CREATED,
         resource_type="backup_schedule",
         resource_id=str(schedule_id),
         description=f"Backup manual iniciado: {schedule.name}",
