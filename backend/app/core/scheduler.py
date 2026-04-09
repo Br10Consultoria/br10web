@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
@@ -199,6 +200,87 @@ async def run_device_status_check():
         logger.error(f"[Scheduler] Erro na verificação de status: {e}", exc_info=True)
 
 
+async def run_backup_job(schedule_id: int):
+    """Executa um agendamento de backup via APScheduler."""
+    logger.info(f"[Scheduler] Iniciando backup agendado — schedule_id={schedule_id}")
+    try:
+        from app.services.device_backup import run_backup_schedule
+        async with AsyncSessionLocal() as db:
+            await run_backup_schedule(
+                schedule_id=schedule_id,
+                db=db,
+                trigger_type="scheduled",
+            )
+    except Exception as e:
+        logger.error(f"[Scheduler] Erro no backup schedule {schedule_id}: {e}", exc_info=True)
+
+
+async def reload_backup_jobs():
+    """
+    Recarrega todos os jobs de backup do banco de dados.
+    Remove jobs obsoletos e adiciona/atualiza os ativos.
+    """
+    if not scheduler.running:
+        return
+
+    try:
+        from app.models.backup_schedule import BackupSchedule, BackupScheduleStatus
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(BackupSchedule).where(
+                    BackupSchedule.status == BackupScheduleStatus.ACTIVE
+                )
+            )
+            schedules = result.scalars().all()
+
+        # Remover jobs de backup antigos
+        for job in scheduler.get_jobs():
+            if job.id.startswith("backup_schedule_"):
+                scheduler.remove_job(job.id)
+
+        # Adicionar jobs ativos
+        for s in schedules:
+            try:
+                # Cron APScheduler usa 5 campos (min h dom mon dow)
+                # Nosso formato é 6 campos (sec min h dom mon dow)
+                # Converter: remover o campo de segundos
+                cron_parts = s.cron_expression.strip().split()
+                if len(cron_parts) == 6:
+                    # Formato: sec min h dom mon dow → usar min h dom mon dow
+                    _, minute, hour, day, month, day_of_week = cron_parts
+                elif len(cron_parts) == 5:
+                    minute, hour, day, month, day_of_week = cron_parts
+                else:
+                    logger.warning(f"[Scheduler] Cron inválido para schedule {s.id}: {s.cron_expression}")
+                    continue
+
+                trigger = CronTrigger(
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week,
+                    timezone=s.timezone or "America/Bahia",
+                )
+                scheduler.add_job(
+                    run_backup_job,
+                    trigger=trigger,
+                    id=f"backup_schedule_{s.id}",
+                    name=f"Backup: {s.name}",
+                    args=[s.id],
+                    replace_existing=True,
+                    max_instances=1,
+                    misfire_grace_time=300,
+                )
+                logger.info(f"[Scheduler] Job de backup registrado: '{s.name}' ({s.cron_expression})")
+            except Exception as e:
+                logger.error(f"[Scheduler] Erro ao registrar job de backup {s.id}: {e}")
+
+        logger.info(f"[Scheduler] {len(schedules)} job(s) de backup carregados.")
+    except Exception as e:
+        logger.error(f"[Scheduler] Erro ao recarregar jobs de backup: {e}", exc_info=True)
+
+
 def start_scheduler():
     """Inicia o scheduler com todos os jobs agendados."""
     # Evitar iniciar múltiplas instâncias (problema com uvicorn --workers > 1)
@@ -215,6 +297,17 @@ def start_scheduler():
         replace_existing=True,
         max_instances=1,       # Garante que apenas uma instância roda por vez
         misfire_grace_time=60, # Tolera até 60s de atraso antes de pular
+    )
+
+    # Job para carregar os agendamentos de backup após 10s do startup
+    scheduler.add_job(
+        reload_backup_jobs,
+        trigger=IntervalTrigger(seconds=10),
+        id="load_backup_jobs_once",
+        name="Carregar jobs de backup (startup)",
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=datetime.now(timezone.utc),  # Executar imediatamente
     )
 
     scheduler.start()

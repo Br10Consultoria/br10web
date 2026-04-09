@@ -20,6 +20,7 @@ import ClientNetworkPage from './pages/ClientNetworkPage'
 import NetworkToolsPage from './pages/NetworkToolsPage'
 import DeviceInspectorPage from './pages/DeviceInspectorPage'
 import InspectorCommandsPage from './pages/InspectorCommandsPage'
+import DeviceBackupPage from './pages/DeviceBackupPage'
 
 function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
   const { isAuthenticated, user } = useAuthStore()
@@ -79,6 +80,7 @@ export default function App() {
           <Route path="devices/:id/terminal" element={<TerminalPage />} />
           <Route path="vpn" element={<VpnPage />} />
           <Route path="backup" element={<BackupPage />} />
+          <Route path="device-backup" element={<DeviceBackupPage />} />
           <Route path="automation" element={<AutomationPage />} />
           <Route path="playbooks" element={<PlaybooksPage />} />
           <Route path="ai-analysis" element={<AIAnalysisPage />} />

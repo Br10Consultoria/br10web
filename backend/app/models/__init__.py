@@ -11,6 +11,9 @@ from app.models.vpn import VpnConfig, StaticRoute, VpnType, VpnStatus
 from app.models.audit import AuditLog, AuditAction
 from app.models.automation import CommandTemplate, CommandExecution, CommandCategory, ExecutionStatus
 from app.models.inspector_command import InspectorCommand
+from app.models.backup_schedule import (
+    BackupSchedule, BackupExecution, BackupScheduleStatus, BackupRunStatus as BackupRunStatusEnum,
+)
 from app.models.playbook import (
     Playbook, PlaybookStep, PlaybookExecution, PlaybookRunStatus,
     AIProviderConfig, AIAnalysis, AIAnalysisStatus, AIProvider,
@@ -28,6 +31,8 @@ __all__ = [
     "AuditLog", "AuditAction",
     "CommandTemplate", "CommandExecution", "CommandCategory", "ExecutionStatus",
     "InspectorCommand",
+    # Backup de dispositivos
+    "BackupSchedule", "BackupExecution", "BackupScheduleStatus", "BackupRunStatusEnum",
     # Playbooks e AI
     "Playbook", "PlaybookStep", "PlaybookExecution", "PlaybookRunStatus",
     "AIProviderConfig", "AIAnalysis", "AIAnalysisStatus", "AIProvider",
