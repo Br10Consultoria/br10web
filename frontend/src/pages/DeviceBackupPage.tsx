@@ -6,6 +6,7 @@ import {
   Server, Zap, Info,
 } from 'lucide-react';
 import api from '../utils/api';
+import { useAuthStore } from '../store/authStore';
 
 const API = '/device-backup';
 
@@ -644,6 +645,7 @@ const ExecutionDetailModal: React.FC<{ execution: Execution; onClose: () => void
 // ─── Página Principal ─────────────────────────────────────────────────────────
 
 const DeviceBackupPage: React.FC = () => {
+  const { accessToken } = useAuthStore();
   const [tab, setTab] = useState<'schedules' | 'history'>('schedules');
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [executions, setExecutions] = useState<Execution[]>([]);
@@ -658,13 +660,16 @@ const DeviceBackupPage: React.FC = () => {
 
   const load = useCallback(async () => {
     setLoading(true);
+    // Garante o token mesmo antes da hidratação do zustand/persist
+    const token = accessToken || localStorage.getItem('access_token');
+    const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
     try {
       const [sRes, eRes, sumRes, pbRes, devRes] = await Promise.all([
-        api.get(`${API}/schedules`),
-        api.get(`${API}/executions?limit=30`),
-        api.get(`${API}/summary`),
-        api.get('/playbooks'),
-        api.get('/devices'),
+        api.get(`${API}/schedules`, { headers: authHeader }),
+        api.get(`${API}/executions?limit=30`, { headers: authHeader }),
+        api.get(`${API}/summary`, { headers: authHeader }),
+        api.get('/playbooks', { headers: authHeader }),
+        api.get('/devices', { headers: authHeader }),
       ]);
       setSchedules(sRes.data);
       setExecutions(eRes.data);
@@ -676,7 +681,7 @@ const DeviceBackupPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => { load(); }, [load]);
 
