@@ -10,11 +10,14 @@ const api = axios.create({
 })
 
 // Request interceptor - adiciona token
+// Usa o store como fonte primária; cai para localStorage quando o zustand/persist
+// ainda não hidratou (ex: chamadas feitas no mount via useEffect antes da hidratação).
 api.interceptors.request.use(
   (config) => {
     const { accessToken } = useAuthStore.getState()
-    if (accessToken) {
-      config.headers.Authorization = `Bearer ${accessToken}`
+    const token = accessToken || localStorage.getItem('access_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
     }
     return config
   },
