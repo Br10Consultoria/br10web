@@ -523,6 +523,7 @@ function ImportScriptModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [selectedVendor, setSelectedVendor] = useState<string>('');
   // Campos editáveis do preview
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -531,17 +532,34 @@ function ImportScriptModal({
   const [steps, setSteps] = useState<PlaybookStep[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  // Lista de vendors disponíveis (sincronizada com bkpolts)
+  const VENDOR_OPTIONS = [
+    { value: '',             label: 'Selecionar vendor (opcional)' },
+    { value: 'huawei',       label: 'Huawei (MA5800, MA5600...)' },
+    { value: 'zte',          label: 'ZTE (C300, C320...)' },
+    { value: 'fiberhome',    label: 'Fiberhome (AN5516...)' },
+    { value: 'datacom',      label: 'Datacom (DM4610...)' },
+    { value: 'parks',        label: 'Parks (OLT...)' },
+    { value: 'intelbras_g16', label: 'Intelbras G16 (GPON#)' },
+  ];
+
   const handleFile = async (file: File) => {
     setError(null);
     setLoading(true);
     try {
-      const data: ImportPreview = await playbooksApi.importScript(file);
-      setPreview(data);
-      setName(data.name);
-      setDescription(data.description);
-      setCategory(data.category);
-      setVariables(Object.entries(data.variables).map(([k, v]) => ({ key: k, value: v })));
-      setSteps(data.steps);
+      const fd = new FormData();
+      fd.append('file', file);
+      if (selectedVendor) fd.append('vendor', selectedVendor);
+      const { data } = await api.post('/playbooks/import-script', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const importData: ImportPreview = data;
+      setPreview(importData);
+      setName(importData.name);
+      setDescription(importData.description);
+      setCategory(importData.category);
+      setVariables(Object.entries(importData.variables).map(([k, v]) => ({ key: k, value: v as string })));
+      setSteps(importData.steps);
       setPhase('preview');
     } catch (err: any) {
       setError(err?.response?.data?.detail || 'Erro ao processar o script.');
@@ -631,6 +649,29 @@ function ImportScriptModal({
           {/* FASE 1: Upload */}
           {phase === 'upload' && (
             <div className="space-y-4">
+
+              {/* Seletor de Vendor */}
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
+                  <span className="text-purple-400">&#9654;</span> Vendor da OLT
+                  <span className="text-gray-500 font-normal">(opcional, melhora a detecção de prompts)</span>
+                </label>
+                <select
+                  value={selectedVendor}
+                  onChange={e => setSelectedVendor(e.target.value)}
+                  className="w-full bg-[#0a1628] border border-[#2a3a5c] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
+                >
+                  {VENDOR_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                {selectedVendor === 'intelbras_g16' && (
+                  <p className="text-xs text-blue-400 flex items-center gap-1">
+                    <span>&#8505;</span> Intelbras G16: prompts ajustados para GPON# automaticamente
+                  </p>
+                )}
+              </div>
+
               <div
                 onDragOver={e => { e.preventDefault(); setDragging(true); }}
                 onDragLeave={() => setDragging(false)}
@@ -706,7 +747,7 @@ function ImportScriptModal({
               )}
 
               {/* Resumo da detecção */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <div className="bg-[#1a2a4a] rounded-lg p-3 text-center">
                   <div className="text-2xl font-bold text-white">{preview.total_steps}</div>
                   <div className="text-xs text-gray-400">Passos detectados</div>
@@ -720,6 +761,15 @@ function ImportScriptModal({
                     {preview.protocol.toUpperCase()}
                   </div>
                   <div className="text-xs text-gray-400">Protocolo</div>
+                </div>
+                <div className="bg-[#1a2a4a] rounded-lg p-3 text-center">
+                  <div className="text-sm font-bold text-purple-400 truncate">
+                    {selectedVendor
+                      ? VENDOR_OPTIONS.find(v => v.value === selectedVendor)?.label?.split(' ')[0] || selectedVendor
+                      : <span className="text-gray-500 text-xs">N/A</span>
+                    }
+                  </div>
+                  <div className="text-xs text-gray-400">Vendor</div>
                 </div>
               </div>
 

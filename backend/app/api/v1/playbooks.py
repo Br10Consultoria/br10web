@@ -555,12 +555,15 @@ async def get_step_types(current_user: User = Depends(get_current_user)):
 @playbooks_router.post("/import-script", status_code=status.HTTP_200_OK)
 async def preview_import_script(
     file: UploadFile = File(...),
+    vendor: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
     """
     Recebe um script (.py, .sh, .bash, .expect, .txt) e retorna
     a estrutura de playbook convertida para revisão antes de salvar.
     NÃO persiste no banco — apenas retorna o preview.
+    O campo 'vendor' é opcional e, quando informado, é usado para
+    ajustar o nome e a descrição do playbook gerado.
     """
     # Validar extensão
     allowed_exts = {'.py', '.sh', '.bash', '.expect', '.tcl', '.txt', '.exp'}
@@ -586,7 +589,7 @@ async def preview_import_script(
             raise HTTPException(status_code=400, detail="Não foi possível decodificar o arquivo. Use UTF-8 ou Latin-1.")
 
     # Converter script → playbook
-    result = import_script_to_playbook(content, filename=filename)
+    result = import_script_to_playbook(content, filename=filename, vendor=vendor)
     return result
 
 

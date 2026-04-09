@@ -369,17 +369,35 @@ def _add_disconnect_step(steps: List[Dict]) -> List[Dict]:
 
 # ─── Função principal ──────────────────────────────────────────────────────────
 
+# Mapeamento de vendor (bkpolts) para label amigável
+VENDOR_LABELS: Dict[str, str] = {
+    "huawei":        "Huawei",
+    "zte":           "ZTE",
+    "fiberhome":     "Fiberhome",
+    "datacom":       "Datacom",
+    "parks":         "Parks",
+    "intelbras_g16": "Intelbras G16",
+}
+
+
 def import_script_to_playbook(
     content: str,
     filename: str = 'script.py',
+    vendor: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Converte um script de automação em um Playbook estruturado.
+
+    Parâmetros:
+      content  : conteúdo do script
+      filename : nome do arquivo original
+      vendor   : vendor selecionado pelo usuário (opcional, ex: 'huawei', 'intelbras_g16')
 
     Retorna um dict com:
       - name: str
       - description: str
       - category: str
+      - vendor: str | None
       - variables: dict
       - steps: list[dict]  (prontos para PlaybookStepCreate)
       - warnings: list[str]  (avisos sobre conversão parcial)
@@ -417,10 +435,41 @@ def import_script_to_playbook(
     name = _infer_name(content, filename)
     category = _infer_category(content, filename)
 
+    # 7b. Ajustar nome e categoria com base no vendor selecionado
+    vendor_label = VENDOR_LABELS.get(vendor or '', '') if vendor else ''
+    if vendor_label and vendor_label.lower() not in name.lower():
+        name = f'Backup {vendor_label}'
+    # Ajustes específicos por vendor
+    if vendor == 'intelbras_g16':
+        # Intelbras G16 usa prompt GPON# — ajustar o passo de conexão telnet
+        for step in all_steps:
+            if step['step_type'] == 'telnet_connect':
+                step['params']['login_prompt'] = 'Username:'
+                step['params']['password_prompt'] = 'Password:'
+                step['label'] = 'Conectar via Telnet (Intelbras G16)'
+            if step['step_type'] == 'wait_for' and step['params'].get('wait_string') == '#':
+                step['params']['wait_string'] = 'GPON#'
+    elif vendor == 'huawei':
+        for step in all_steps:
+            if step['step_type'] == 'wait_for' and step['params'].get('wait_string') == '#':
+                step['params']['wait_string'] = '#'
+    elif vendor == 'zte':
+        for step in all_steps:
+            if step['step_type'] == 'telnet_connect':
+                step['params']['login_prompt'] = 'login:'
+                step['params']['password_prompt'] = 'Password:'
+    elif vendor == 'fiberhome':
+        for step in all_steps:
+            if step['step_type'] == 'telnet_connect':
+                step['params']['login_prompt'] = 'Login:'
+                step['params']['password_prompt'] = 'Password:'
+
     # 8. Gerar descrição automática
     n_cmds = sum(1 for s in all_steps if s['step_type'] == 'send_command')
     n_ftp = sum(1 for s in all_steps if s['step_type'] == 'ftp_download')
     desc_parts = [f'Importado de: {filename}', f'Protocolo: {protocol.upper()}']
+    if vendor_label:
+        desc_parts.insert(0, f'Vendor: {vendor_label}')
     if n_cmds:
         desc_parts.append(f'{n_cmds} comando(s) detectado(s)')
     if n_ftp:
@@ -444,6 +493,7 @@ def import_script_to_playbook(
         'name': name,
         'description': description,
         'category': category,
+        'vendor': vendor,
         'variables': variables,
         'steps': all_steps,
         'warnings': warnings,
