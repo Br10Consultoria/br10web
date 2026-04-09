@@ -5,9 +5,9 @@ import {
   Settings, Database, Activity, Bell, Eye, Edit2, ToggleLeft, ToggleRight,
   Server, Zap, Info,
 } from 'lucide-react';
-import axios from 'axios';
+import api from '../utils/api';
 
-const API = '/api/v1/device-backup';
+const API = '/device-backup';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -197,7 +197,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
     setTestingTelegram(true);
     setTelegramTestResult(null);
     try {
-      await axios.post(`${API}/test-telegram`, {
+      await api.post(`${API}/test-telegram`, {
         token: form.telegram_token,
         chat_id: form.telegram_chat_id,
       });
@@ -223,9 +223,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
         retention_days: parseInt(form.retention_days),
       };
       if (isEdit) {
-        await axios.put(`${API}/schedules/${schedule!.id}`, payload);
+        await api.put(`${API}/schedules/${schedule!.id}`, payload);
       } else {
-        await axios.post(`${API}/schedules`, payload);
+        await api.post(`${API}/schedules`, payload);
       }
       onSave();
       onClose();
@@ -660,11 +660,11 @@ const DeviceBackupPage: React.FC = () => {
     setLoading(true);
     try {
       const [sRes, eRes, sumRes, pbRes, devRes] = await Promise.all([
-        axios.get(`${API}/schedules`),
-        axios.get(`${API}/executions?limit=30`),
-        axios.get(`${API}/summary`),
-        axios.get('/api/v1/playbooks'),
-        axios.get('/api/v1/devices'),
+        api.get(`${API}/schedules`),
+        api.get(`${API}/executions?limit=30`),
+        api.get(`${API}/summary`),
+        api.get('/playbooks'),
+        api.get('/devices'),
       ]);
       setSchedules(sRes.data);
       setExecutions(eRes.data);
@@ -689,7 +689,7 @@ const DeviceBackupPage: React.FC = () => {
   const handleRunNow = async (scheduleId: string) => {
     setRunningIds(prev => new Set(prev).add(scheduleId));
     try {
-      await axios.post(`${API}/schedules/${scheduleId}/run`);
+      await api.post(`${API}/schedules/${scheduleId}/run`);
       setTimeout(load, 2000);
     } catch (e: any) {
       alert(e.response?.data?.detail || 'Erro ao iniciar backup');
@@ -700,7 +700,7 @@ const DeviceBackupPage: React.FC = () => {
 
   const handleToggle = async (scheduleId: string) => {
     try {
-      await axios.post(`${API}/schedules/${scheduleId}/toggle`);
+      await api.post(`${API}/schedules/${scheduleId}/toggle`);
       load();
     } catch (e: any) {
       alert(e.response?.data?.detail || 'Erro ao alterar status');
@@ -710,7 +710,7 @@ const DeviceBackupPage: React.FC = () => {
   const handleDelete = async (s: Schedule) => {
     if (!confirm(`Remover o agendamento "${s.name}"? O histórico de execuções também será removido.`)) return;
     try {
-      await axios.delete(`${API}/schedules/${s.id}`);
+      await api.delete(`${API}/schedules/${s.id}`);
       load();
     } catch (e: any) {
       alert(e.response?.data?.detail || 'Erro ao remover');
