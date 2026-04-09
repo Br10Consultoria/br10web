@@ -17,7 +17,8 @@ Endpoints:
 """
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from pydantic import BaseModel
@@ -43,9 +44,9 @@ router = APIRouter(prefix="/device-backup", tags=["Device Backup"])
 class ScheduleCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    playbook_id: Optional[int] = None
-    device_ids: List[int] = []
-    cron_expression: str = "0 0 22 * * *"
+    playbook_id: Optional[str] = None          # UUID como string
+    device_ids: List[str] = []                 # Lista de UUIDs como strings
+    cron_expression: str = "0 22 * * *"
     timezone: str = "America/Bahia"
     status: str = "active"
     variables_override: Dict[str, Any] = {}
@@ -60,8 +61,8 @@ class ScheduleCreate(BaseModel):
 class ScheduleUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    playbook_id: Optional[int] = None
-    device_ids: Optional[List[int]] = None
+    playbook_id: Optional[str] = None          # UUID como string
+    device_ids: Optional[List[str]] = None     # Lista de UUIDs como strings
     cron_expression: Optional[str] = None
     timezone: Optional[str] = None
     status: Optional[str] = None
@@ -79,18 +80,25 @@ class TelegramTestRequest(BaseModel):
     chat_id: str
 
 
+def _uuid_str(v) -> Optional[str]:
+    """Converte UUID ou string para string, retorna None se None."""
+    if v is None:
+        return None
+    return str(v)
+
+
 def _schedule_to_dict(s: BackupSchedule) -> Dict:
     return {
         "id": s.id,
         "name": s.name,
         "description": s.description,
-        "playbook_id": s.playbook_id,
+        "playbook_id": _uuid_str(s.playbook_id),
         "playbook_name": s.playbook_name,
-        "device_ids": s.device_ids or [],
+        "device_ids": [_uuid_str(d) for d in (s.device_ids or [])],
         "device_names": s.device_names or [],
         "cron_expression": s.cron_expression,
         "timezone": s.timezone,
-        "status": s.status,
+        "status": s.status.value if hasattr(s.status, "value") else s.status,
         "variables_override": s.variables_override or {},
         "telegram_enabled": s.telegram_enabled,
         "telegram_token": ("*" * 10 + s.telegram_token[-4:]) if s.telegram_token else None,
@@ -102,7 +110,7 @@ def _schedule_to_dict(s: BackupSchedule) -> Dict:
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
         "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
         "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
-        "last_status": s.last_status,
+        "last_status": s.last_status.value if s.last_status and hasattr(s.last_status, "value") else s.last_status,
     }
 
 
@@ -110,10 +118,10 @@ def _execution_to_dict(e: BackupExecution) -> Dict:
     return {
         "id": e.id,
         "schedule_id": e.schedule_id,
-        "triggered_by": e.triggered_by,
+        "triggered_by": _uuid_str(e.triggered_by),
         "triggered_by_name": e.triggered_by_name,
         "trigger_type": e.trigger_type,
-        "status": e.status,
+        "status": e.status.value if hasattr(e.status, "value") else e.status,
         "started_at": e.started_at.isoformat() if e.started_at else None,
         "finished_at": e.finished_at.isoformat() if e.finished_at else None,
         "duration_ms": e.duration_ms,
@@ -132,14 +140,19 @@ async def _update_device_names(schedule: BackupSchedule, db: AsyncSession):
     if not schedule.device_ids:
         schedule.device_names = []
         return
+    # device_ids são strings UUID — converter para UUID para a query
+    try:
+        uuid_ids = [UUID(str(d)) for d in schedule.device_ids]
+    except Exception:
+        uuid_ids = schedule.device_ids
     res = await db.execute(
-        select(Device.id, Device.name).where(Device.id.in_(schedule.device_ids))
+        select(Device.id, Device.name).where(Device.id.in_(uuid_ids))
     )
-    id_to_name = {r.id: r.name for r in res}
-    schedule.device_names = [id_to_name.get(did, f"ID:{did}") for did in schedule.device_ids]
+    id_to_name = {str(r.id): r.name for r in res}
+    schedule.device_names = [id_to_name.get(str(did), f"ID:{did}") for did in schedule.device_ids]
 
 
-async def _reload_scheduler(schedule: BackupSchedule):
+async def _reload_scheduler(schedule):
     """Notifica o APScheduler para recarregar os jobs de backup."""
     try:
         from app.core.scheduler import reload_backup_jobs
@@ -171,21 +184,29 @@ async def create_schedule(
     current_user: User = Depends(get_current_user),
 ):
     """Cria um novo agendamento de backup."""
-    # Validar playbook
+    # Validar playbook (UUID como string)
     playbook_name = None
+    playbook_uuid = None
     if body.playbook_id:
-        pb_res = await db.execute(select(Playbook).where(Playbook.id == body.playbook_id))
+        try:
+            playbook_uuid = UUID(str(body.playbook_id))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="playbook_id inválido")
+        pb_res = await db.execute(select(Playbook).where(Playbook.id == playbook_uuid))
         pb = pb_res.scalar_one_or_none()
         if not pb:
             raise HTTPException(status_code=404, detail="Playbook não encontrado")
         playbook_name = pb.name
 
+    # device_ids como lista de strings UUID
+    device_ids_str = [str(d) for d in body.device_ids]
+
     schedule = BackupSchedule(
         name=body.name,
         description=body.description,
-        playbook_id=body.playbook_id,
+        playbook_id=playbook_uuid,
         playbook_name=playbook_name,
-        device_ids=body.device_ids,
+        device_ids=device_ids_str,
         cron_expression=body.cron_expression,
         timezone=body.timezone,
         status=body.status,
@@ -244,11 +265,11 @@ async def update_schedule(
     if not schedule:
         raise HTTPException(status_code=404, detail="Agendamento não encontrado")
 
-    if body.name is not None:          schedule.name = body.name
-    if body.description is not None:   schedule.description = body.description
+    if body.name is not None:           schedule.name = body.name
+    if body.description is not None:    schedule.description = body.description
     if body.cron_expression is not None: schedule.cron_expression = body.cron_expression
-    if body.timezone is not None:      schedule.timezone = body.timezone
-    if body.status is not None:        schedule.status = body.status
+    if body.timezone is not None:       schedule.timezone = body.timezone
+    if body.status is not None:         schedule.status = body.status
     if body.variables_override is not None: schedule.variables_override = body.variables_override
     if body.telegram_enabled is not None:   schedule.telegram_enabled = body.telegram_enabled
     if body.telegram_on_error is not None:  schedule.telegram_on_error = body.telegram_on_error
@@ -260,16 +281,20 @@ async def update_schedule(
         schedule.telegram_token = body.telegram_token
 
     if body.playbook_id is not None:
-        schedule.playbook_id = body.playbook_id
-        if body.playbook_id:
-            pb_res = await db.execute(select(Playbook).where(Playbook.id == body.playbook_id))
+        try:
+            playbook_uuid = UUID(str(body.playbook_id)) if body.playbook_id else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="playbook_id inválido")
+        schedule.playbook_id = playbook_uuid
+        if playbook_uuid:
+            pb_res = await db.execute(select(Playbook).where(Playbook.id == playbook_uuid))
             pb = pb_res.scalar_one_or_none()
             schedule.playbook_name = pb.name if pb else None
         else:
             schedule.playbook_name = None
 
     if body.device_ids is not None:
-        schedule.device_ids = body.device_ids
+        schedule.device_ids = [str(d) for d in body.device_ids]
         await _update_device_names(schedule, db)
 
     schedule.updated_at = datetime.utcnow()
@@ -419,10 +444,13 @@ async def list_executions(
 
     # Buscar nomes dos schedules
     schedule_ids = list({e.schedule_id for e in executions})
-    names_res = await db.execute(
-        select(BackupSchedule.id, BackupSchedule.name).where(BackupSchedule.id.in_(schedule_ids))
-    )
-    id_to_name = {r.id: r.name for r in names_res}
+    if schedule_ids:
+        names_res = await db.execute(
+            select(BackupSchedule.id, BackupSchedule.name).where(BackupSchedule.id.in_(schedule_ids))
+        )
+        id_to_name = {r.id: r.name for r in names_res}
+    else:
+        id_to_name = {}
 
     result_list = []
     for e in executions:
@@ -495,8 +523,8 @@ async def get_summary(
     schedules_res = await db.execute(select(BackupSchedule))
     schedules = schedules_res.scalars().all()
 
-    active_count  = sum(1 for s in schedules if s.status == BackupScheduleStatus.ACTIVE)
-    paused_count  = sum(1 for s in schedules if s.status == BackupScheduleStatus.PAUSED)
+    active_count = sum(1 for s in schedules if s.status == BackupScheduleStatus.ACTIVE)
+    paused_count = sum(1 for s in schedules if s.status == BackupScheduleStatus.PAUSED)
 
     # Últimas 10 execuções
     exec_res = await db.execute(

@@ -12,12 +12,12 @@ const API = '/api/v1/device-backup';
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 interface Schedule {
-  id: number;
+  id: string;           // UUID
   name: string;
   description?: string;
-  playbook_id?: number;
+  playbook_id?: string; // UUID
   playbook_name?: string;
-  device_ids: number[];
+  device_ids: string[]; // UUIDs
   device_names: string[];
   cron_expression: string;
   timezone: string;
@@ -46,19 +46,19 @@ interface StepLog {
 }
 
 interface DeviceResult {
-  device_id: number;
+  device_id: string;    // UUID
   device_name: string;
   status: 'success' | 'failure' | 'pending';
   error?: string;
   duration_ms?: number;
-  playbook_execution_id?: number;
+  playbook_execution_id?: string;
   step_logs?: StepLog[];
   output_files?: string[];
 }
 
 interface Execution {
-  id: number;
-  schedule_id: number;
+  id: string;           // UUID ou number (do backend)
+  schedule_id: string;  // UUID
   schedule_name?: string;
   triggered_by_name?: string;
   trigger_type: string;
@@ -72,6 +72,7 @@ interface Execution {
   failure_count: number;
   error_message?: string;
   telegram_sent: boolean;
+  telegram_error?: string;
 }
 
 interface Summary {
@@ -84,8 +85,8 @@ interface Summary {
   recent_executions: Execution[];
 }
 
-interface Playbook { id: number; name: string; category?: string; }
-interface Device   { id: number; name: string; ip_address?: string; management_ip?: string; }
+interface Playbook { id: string; name: string; category?: string; }
+interface Device   { id: string; name: string; ip_address?: string; management_ip?: string; }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -151,8 +152,8 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
   const [form, setForm] = useState({
     name: schedule?.name || '',
     description: schedule?.description || '',
-    playbook_id: schedule?.playbook_id?.toString() || '',
-    device_ids: schedule?.device_ids || [] as number[],
+    playbook_id: schedule?.playbook_id || '',       // string UUID
+    device_ids: schedule?.device_ids || [] as string[], // string UUIDs
     cron_expression: schedule?.cron_expression || '0 22 * * *',
     timezone: schedule?.timezone || 'America/Bahia',
     telegram_enabled: schedule?.telegram_enabled || false,
@@ -175,9 +176,10 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
-  const toggleDevice = (id: number) => {
+  // Dispositivos: IDs são strings UUID
+  const toggleDevice = (id: string) => {
     set('device_ids', form.device_ids.includes(id)
-      ? form.device_ids.filter(d => d !== id)
+      ? form.device_ids.filter((d: string) => d !== id)
       : [...form.device_ids, id]
     );
   };
@@ -215,7 +217,9 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
     try {
       const payload = {
         ...form,
-        playbook_id: parseInt(form.playbook_id),
+        // playbook_id e device_ids já são strings UUID — não converter para int
+        playbook_id: form.playbook_id,
+        device_ids: form.device_ids,
         retention_days: parseInt(form.retention_days),
       };
       if (isEdit) {
@@ -283,7 +287,7 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
                   value={form.description}
                   onChange={e => set('description', e.target.value)}
                   rows={2}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-blue-500 outline-none resize-none"
+                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-blue-500 outline-none"
                 />
               </div>
               <div>
@@ -469,7 +473,10 @@ const ScheduleModal: React.FC<ScheduleModalProps> = ({ schedule, playbooks, devi
 
         {/* Footer */}
         <div className="flex justify-end gap-3 p-5 border-t border-gray-700">
-          <button onClick={onClose} className="px-4 py-2 text-gray-300 hover:text-white text-sm transition-colors">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-gray-400 hover:text-white border border-gray-600 rounded-lg text-sm transition-colors"
+          >
             Cancelar
           </button>
           <button
@@ -625,8 +632,8 @@ const ExecutionDetailModal: React.FC<{ execution: Execution; onClose: () => void
           {execution.telegram_sent
             ? 'Notificação Telegram enviada com sucesso'
             : 'Notificação Telegram não enviada'}
-          {(execution as any).telegram_error && (
-            <span className="text-red-400">— {(execution as any).telegram_error}</span>
+          {execution.telegram_error && (
+            <span className="text-red-400">— {execution.telegram_error}</span>
           )}
         </div>
       </div>
@@ -647,7 +654,7 @@ const DeviceBackupPage: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [editSchedule, setEditSchedule] = useState<Schedule | null>(null);
   const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
-  const [runningIds, setRunningIds] = useState<Set<number>>(new Set());
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -679,7 +686,7 @@ const DeviceBackupPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [load]);
 
-  const handleRunNow = async (scheduleId: number) => {
+  const handleRunNow = async (scheduleId: string) => {
     setRunningIds(prev => new Set(prev).add(scheduleId));
     try {
       await axios.post(`${API}/schedules/${scheduleId}/run`);
@@ -691,7 +698,7 @@ const DeviceBackupPage: React.FC = () => {
     }
   };
 
-  const handleToggle = async (scheduleId: number) => {
+  const handleToggle = async (scheduleId: string) => {
     try {
       await axios.post(`${API}/schedules/${scheduleId}/toggle`);
       load();
