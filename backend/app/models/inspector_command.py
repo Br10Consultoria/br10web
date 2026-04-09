@@ -5,7 +5,7 @@ Armazena comandos de inspeção editáveis por tipo de dispositivo (vendor).
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Text, Integer, Boolean, DateTime, Index
-from app.core.database import Base
+from app.models.base import Base
 
 
 class InspectorCommand(Base):
