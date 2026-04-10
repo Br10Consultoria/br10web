@@ -50,9 +50,21 @@ class AuditAction(str, enum.Enum):
     ROUTE_UPDATED = "route_updated"
     ROUTE_DELETED = "route_deleted"
 
-    # ── Backup ────────────────────────────────────────────────────────────────
+    # ── Backup DB ─────────────────────────────────────────────────────────────
     BACKUP_CREATED = "backup_created"
     BACKUP_RESTORED = "backup_restored"
+
+    # ── Playbooks ─────────────────────────────────────────────────────────────
+    PLAYBOOK_CREATED = "playbook_created"
+    PLAYBOOK_UPDATED = "playbook_updated"
+    PLAYBOOK_DELETED = "playbook_deleted"
+    PLAYBOOK_EXECUTED = "playbook_executed"
+
+    # ── Backup de Dispositivos ────────────────────────────────────────────────
+    BACKUP_SCHEDULE_CREATED = "backup_schedule_created"
+    BACKUP_SCHEDULE_UPDATED = "backup_schedule_updated"
+    BACKUP_SCHEDULE_DELETED = "backup_schedule_deleted"
+    BACKUP_SCHEDULE_EXECUTED = "backup_schedule_executed"
 
     # ── Usuários ──────────────────────────────────────────────────────────────
     USER_CREATED = "user_created"

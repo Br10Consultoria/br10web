@@ -235,6 +235,15 @@ async def create_playbook(
         )
         db.add(step)
 
+    # Auditoria
+    db.add(AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.PLAYBOOK_CREATED,
+        resource_type="playbook",
+        resource_id=str(pb.id),
+        description=f"Playbook '{pb.name}' criado",
+        status="success",
+    ))
     await db.commit()
 
     result = await db.execute(
@@ -312,6 +321,15 @@ async def update_playbook(
             )
             db.add(step)
 
+    # Auditoria
+    db.add(AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.PLAYBOOK_UPDATED,
+        resource_type="playbook",
+        resource_id=str(pb.id),
+        description=f"Playbook '{pb.name}' atualizado",
+        status="success",
+    ))
     await db.commit()
 
     result = await db.execute(
@@ -333,7 +351,18 @@ async def delete_playbook(
     pb = result.scalar_one_or_none()
     if not pb:
         raise HTTPException(status_code=404, detail="Playbook não encontrado.")
+    pb_name = pb.name
+    pb_id = str(pb.id)
     await db.delete(pb)
+    # Auditoria
+    db.add(AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.PLAYBOOK_DELETED,
+        resource_type="playbook",
+        resource_id=pb_id,
+        description=f"Playbook '{pb_name}' excluído",
+        status="success",
+    ))
     await db.commit()
 
 
@@ -465,7 +494,9 @@ async def execute_playbook(
     audit = AuditLog(
         user_id=current_user.id,
         device_id=device.id,
-        action=AuditAction.COMMAND_EXECUTED if run_ok else AuditAction.COMMAND_FAILED,
+        action=AuditAction.PLAYBOOK_EXECUTED,
+        resource_type="playbook",
+        resource_id=str(pb.id),
         description=f"Playbook '{pb.name}' executado em {device.name} ({device.management_ip})",
         status="success" if run_ok else "failure",
         error_message=result.get("error_message"),
