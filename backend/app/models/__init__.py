@@ -14,6 +14,7 @@ from app.models.inspector_command import InspectorCommand
 from app.models.backup_schedule import (
     BackupSchedule, BackupExecution, BackupScheduleStatus, BackupRunStatus as BackupRunStatusEnum,
 )
+from app.models.rpki_monitor import RpkiMonitor, RpkiCheck
 from app.models.playbook import (
     Playbook, PlaybookStep, PlaybookExecution, PlaybookRunStatus,
     AIProviderConfig, AIAnalysis, AIAnalysisStatus, AIProvider,
@@ -37,4 +38,6 @@ __all__ = [
     "Playbook", "PlaybookStep", "PlaybookExecution", "PlaybookRunStatus",
     "AIProviderConfig", "AIAnalysis", "AIAnalysisStatus", "AIProvider",
     "PlaybookStatus", "PlaybookStepType",
+    # Monitor RPKI
+    "RpkiMonitor", "RpkiCheck",
 ]

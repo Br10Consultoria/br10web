@@ -115,6 +115,8 @@ async def init_database():
                 "DO $$ BEGIN CREATE TYPE aianalysisstatus AS ENUM ('pending', 'running', 'success', 'error'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE backupschedulestatus AS ENUM ('active', 'paused', 'disabled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE backuprunstatus AS ENUM ('pending', 'running', 'success', 'partial', 'failure', 'cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                # ENUMs do Monitor RPKI
+                "DO $$ BEGIN CREATE TYPE rpkistatus AS ENUM ('valid', 'invalid', 'not-found', 'unknown', 'error'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
             ]
             for sql in enums_sql:
                 await conn.execute(text(sql))

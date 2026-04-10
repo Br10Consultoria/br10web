@@ -200,6 +200,53 @@ async def run_device_status_check():
         logger.error(f"[Scheduler] Erro na verificação de status: {e}", exc_info=True)
 
 
+async def run_rpki_check_all():
+    """
+    Task agendada: verifica todos os monitores RPKI ativos.
+    Executada 3x ao dia: 06h, 12h e 22h (horário de Brasília).
+    """
+    logger.info("[Scheduler] Iniciando verificação RPKI de todos os monitores...")
+    try:
+        from app.models.rpki_monitor import RpkiMonitor
+        from app.api.v1.rpki_monitor import _check_monitor
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(RpkiMonitor).where(RpkiMonitor.active == True)  # noqa: E712
+            )
+            monitors = result.scalars().all()
+
+            if not monitors:
+                logger.info("[Scheduler] Nenhum monitor RPKI ativo encontrado.")
+                return
+
+            logger.info(f"[Scheduler] Verificando {len(monitors)} monitor(es) RPKI...")
+            valid_count = invalid_count = error_count = 0
+
+            for monitor in monitors:
+                try:
+                    check = await _check_monitor(monitor, db, trigger_type="scheduled")
+                    if check.status == "valid":
+                        valid_count += 1
+                    elif check.status == "invalid":
+                        invalid_count += 1
+                        logger.warning(
+                            f"[Scheduler] RPKI INVÁLIDO: {monitor.name} — "
+                            f"{monitor.prefix} (AS{monitor.asn})"
+                        )
+                    else:
+                        error_count += 1
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"[Scheduler] Erro ao verificar monitor RPKI {monitor.name}: {e}")
+
+            logger.info(
+                f"[Scheduler] Verificação RPKI concluída — "
+                f"Válidos: {valid_count}, Inválidos: {invalid_count}, Erros/Outros: {error_count}"
+            )
+    except Exception as e:
+        logger.error(f"[Scheduler] Erro na verificação RPKI: {e}", exc_info=True)
+
+
 async def run_backup_job(schedule_id: int):
     """Executa um agendamento de backup via APScheduler."""
     logger.info(f"[Scheduler] Iniciando backup agendado — schedule_id={schedule_id}")
@@ -310,8 +357,19 @@ def start_scheduler():
         next_run_time=datetime.now(timezone.utc),  # Executar imediatamente
     )
 
+    # Verificação RPKI 3x ao dia: 06h, 12h e 22h (horário de Brasília)
+    scheduler.add_job(
+        run_rpki_check_all,
+        trigger=CronTrigger(hour="6,12,22", minute=0, timezone="America/Bahia"),
+        id="rpki_check_all",
+        name="Verificação RPKI de Monitores (3x/dia)",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
-    logger.info("[Scheduler] Iniciado — verificação de status a cada 5 minutos.")
+    logger.info("[Scheduler] Iniciado — verificação de status a cada 5 minutos, RPKI às 06h/12h/22h.")
 
 
 def stop_scheduler():

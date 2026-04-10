@@ -28,6 +28,7 @@ from app.api.v1.network_tools import router as network_tools_router
 from app.api.v1.device_inspector import router as device_inspector_router
 from app.api.v1.inspector_commands import router as inspector_commands_router
 from app.api.v1.device_backup import router as device_backup_router
+from app.api.v1.rpki_monitor import router as rpki_monitor_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -153,6 +154,7 @@ app.include_router(network_tools_router, prefix=API_PREFIX)
 app.include_router(device_inspector_router, prefix=API_PREFIX)
 app.include_router(inspector_commands_router, prefix=API_PREFIX)
 app.include_router(device_backup_router, prefix=API_PREFIX)
+app.include_router(rpki_monitor_router, prefix=API_PREFIX)
 
 # ─── Static Files ─────────────────────────────────────────────────────────────
 uploads_dir = settings.UPLOAD_DIR
