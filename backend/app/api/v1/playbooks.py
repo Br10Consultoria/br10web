@@ -25,7 +25,8 @@ from app.models.playbook import (
     PlaybookStatus, PlaybookStepType,
 )
 from app.models.device import Device, DeviceCredential
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 from app.models.user import User
 from app.services.playbook_runner import PlaybookRunner
 from app.services.ai_analyzer import analyze_with_ai, SYSTEM_PROMPTS, PROVIDER_MODELS as AI_PROVIDERS
@@ -235,16 +236,17 @@ async def create_playbook(
         )
         db.add(step)
 
+    await db.commit()
     # Auditoria
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await log_audit(
+        db,
         action=AuditAction.PLAYBOOK_CREATED,
+        user_id=current_user.id,
         resource_type="playbook",
         resource_id=str(pb.id),
         description=f"Playbook '{pb.name}' criado",
         status="success",
-    ))
-    await db.commit()
+    )
 
     result = await db.execute(
         select(Playbook)
@@ -321,16 +323,17 @@ async def update_playbook(
             )
             db.add(step)
 
+    await db.commit()
     # Auditoria
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await log_audit(
+        db,
         action=AuditAction.PLAYBOOK_UPDATED,
+        user_id=current_user.id,
         resource_type="playbook",
         resource_id=str(pb.id),
         description=f"Playbook '{pb.name}' atualizado",
         status="success",
-    ))
-    await db.commit()
+    )
 
     result = await db.execute(
         select(Playbook)
@@ -354,16 +357,17 @@ async def delete_playbook(
     pb_name = pb.name
     pb_id = str(pb.id)
     await db.delete(pb)
+    await db.commit()
     # Auditoria
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await log_audit(
+        db,
         action=AuditAction.PLAYBOOK_DELETED,
+        user_id=current_user.id,
         resource_type="playbook",
         resource_id=pb_id,
         description=f"Playbook '{pb_name}' excluído",
         status="success",
-    ))
-    await db.commit()
+    )
 
 
 # ─── Execução de Playbooks ────────────────────────────────────────────────────
@@ -491,10 +495,12 @@ async def execute_playbook(
 
     # Registrar na auditoria
     run_ok = result["status"] == "success"
-    audit = AuditLog(
+    await db.commit()
+    await log_audit(
+        db,
+        action=AuditAction.PLAYBOOK_EXECUTED,
         user_id=current_user.id,
         device_id=device.id,
-        action=AuditAction.PLAYBOOK_EXECUTED,
         resource_type="playbook",
         resource_id=str(pb.id),
         description=f"Playbook '{pb.name}' executado em {device.name} ({device.management_ip})",
@@ -509,8 +515,6 @@ async def execute_playbook(
             "duration_ms": result.get("duration_ms"),
         },
     )
-    db.add(audit)
-    await db.commit()
 
     return _execution_to_dict(execution)
 

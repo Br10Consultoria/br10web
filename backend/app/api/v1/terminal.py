@@ -18,7 +18,8 @@ from app.core.database import get_db
 from app.core.security import decode_token, decrypt_field
 from app.models.device import Device
 from app.models.user import User
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 from app.services.terminal import (
     SSHTerminalSession, TelnetTerminalSession, session_manager
 )
@@ -49,25 +50,20 @@ async def _write_audit(
     error_message: Optional[str] = None,
     extra_data: Optional[dict] = None,
 ):
-    """Grava um registro de auditoria no banco de dados."""
-    try:
-        await db.execute(
-            AuditLog.__table__.insert().values(
-                action=action,
-                description=description,
-                status=status,
-                user_id=user_id,
-                device_id=device_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                error_message=error_message,
-                extra_data=extra_data,
-                resource_type="terminal",
-            )
-        )
-        await db.commit()
-    except Exception as e:
-        logger.error(f"Falha ao gravar auditoria: {e}")
+    """Wrapper para log_audit centralizado."""
+    await log_audit(
+        db,
+        action=action,
+        description=description,
+        status=status,
+        user_id=user_id,
+        device_id=device_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        error_message=error_message,
+        extra_data=extra_data,
+        resource_type="terminal",
+    )
 
 
 @router.websocket("/ws/{device_id}")

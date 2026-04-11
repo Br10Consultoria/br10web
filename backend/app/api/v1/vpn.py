@@ -15,7 +15,8 @@ from app.core.database import get_db
 from app.core.security import encrypt_field, decrypt_field
 from app.models.vpn import VpnConfig, StaticRoute, VpnStatus
 from app.models.user import User
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 from app.api.v1.auth import get_current_user, require_technician
 from app.schemas.vpn import (
     VpnConfigCreate, VpnConfigUpdate, VpnConfigResponse,
@@ -54,26 +55,21 @@ async def _write_audit(
     resource_type: str = "vpn",
     resource_id: Optional[str] = None,
 ):
-    """Grava um registro de auditoria no banco de dados."""
-    try:
-        await db.execute(
-            AuditLog.__table__.insert().values(
-                action=action,
-                description=description,
-                status=audit_status,
-                user_id=user_id,
-                device_id=device_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                error_message=error_message,
-                extra_data=extra_data,
-                resource_type=resource_type,
-                resource_id=resource_id,
-            )
-        )
-        await db.commit()
-    except Exception as e:
-        logger.error(f"Falha ao gravar auditoria VPN: {e}")
+    """Wrapper para log_audit centralizado."""
+    await log_audit(
+        db,
+        action=action,
+        description=description,
+        status=audit_status,
+        user_id=user_id,
+        device_id=device_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        error_message=error_message,
+        extra_data=extra_data,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )
 
 
 def _get_request_ip(request: Request) -> Optional[str]:

@@ -17,7 +17,8 @@ from app.core.security import (
 )
 from app.core.config import settings
 from app.models.user import User, UserSession
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 from app.schemas.auth import (
     LoginRequest, LoginResponse, TwoFASetupResponse, TwoFAVerifyRequest,
     RefreshTokenRequest, ChangePasswordRequest, UserCreate, UserUpdate, UserResponse
@@ -120,15 +121,13 @@ async def login(
             await db.commit()
 
         # Log de falha
-        await db.execute(
-            AuditLog.__table__.insert().values(
-                action=AuditAction.LOGIN_FAILED,
-                description=f"Tentativa de login falhou para: {login_data.username}",
-                ip_address=client_ip,
-                status="failure",
-            )
+        await log_audit(
+            db,
+            action=AuditAction.LOGIN_FAILED,
+            description=f"Tentativa de login falhou para: {login_data.username}",
+            ip_address=client_ip,
+            status="failure",
         )
-        await db.commit()
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -173,17 +172,14 @@ async def login(
     refresh_token = create_refresh_token(subject=str(user.id))
 
     # Log de login bem-sucedido
-    await db.execute(
-        AuditLog.__table__.insert().values(
-            user_id=user.id,
-            action=AuditAction.LOGIN,
-            description=f"Login bem-sucedido: {user.username}",
-            ip_address=client_ip,
-            status="success",
-        )
+    await log_audit(
+        db,
+        action=AuditAction.LOGIN,
+        user_id=user.id,
+        description=f"Login bem-sucedido: {user.username}",
+        ip_address=client_ip,
+        status="success",
     )
-
-    await db.commit()
 
     return LoginResponse(
         access_token=access_token,
@@ -315,15 +311,13 @@ async def change_password(
     current_user.password_changed_at = datetime.utcnow()
 
     # Log de auditoria
-    await db.execute(
-        AuditLog.__table__.insert().values(
-            user_id=current_user.id,
-            action=AuditAction.PASSWORD_CHANGED,
-            description=f"Senha alterada pelo usuário: {current_user.username}",
-            status="success",
-        )
+    await log_audit(
+        db,
+        action=AuditAction.PASSWORD_CHANGED,
+        user_id=current_user.id,
+        description=f"Senha alterada pelo usuário: {current_user.username}",
+        status="success",
     )
-    await db.commit()
 
     return {"message": "Senha alterada com sucesso"}
 
@@ -368,16 +362,14 @@ async def create_user(
     await db.flush()
 
     # Log de auditoria
-    await db.execute(
-        AuditLog.__table__.insert().values(
-            user_id=current_user.id,
-            action=AuditAction.USER_CREATED,
-            description=f"Usuário criado: {user.username} ({user.role.value})",
-            new_values={"username": user.username, "email": user.email, "role": user.role.value},
-            status="success",
-        )
+    await log_audit(
+        db,
+        action=AuditAction.USER_CREATED,
+        user_id=current_user.id,
+        description=f"Usuário criado: {user.username} ({user.role.value})",
+        new_values={"username": user.username, "email": user.email, "role": user.role.value},
+        status="success",
     )
-    await db.commit()
     await db.refresh(user)
     return user
 
@@ -410,17 +402,15 @@ async def update_user(
         setattr(user, field, value)
 
     # Log de auditoria
-    await db.execute(
-        AuditLog.__table__.insert().values(
-            user_id=current_user.id,
-            action=AuditAction.USER_UPDATED,
-            description=f"Usuário atualizado: {user.username}",
-            old_values=old_values,
-            new_values=data.dict(exclude_none=True),
-            status="success",
-        )
+    await log_audit(
+        db,
+        action=AuditAction.USER_UPDATED,
+        user_id=current_user.id,
+        description=f"Usuário atualizado: {user.username}",
+        old_values=old_values,
+        new_values=data.dict(exclude_none=True),
+        status="success",
     )
-    await db.commit()
     await db.refresh(user)
     return user
 

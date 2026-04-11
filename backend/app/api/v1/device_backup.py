@@ -31,7 +31,8 @@ from app.models.user import User
 from app.models.backup_schedule import BackupSchedule, BackupExecution, BackupScheduleStatus, BackupRunStatus
 from app.models.device import Device
 from app.models.playbook import Playbook
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 from app.services.device_backup import run_backup_schedule, test_telegram
 
 logger = logging.getLogger(__name__)
@@ -223,17 +224,18 @@ async def create_schedule(
     db.add(schedule)
     await db.flush()
 
+    await db.commit()
     # Auditoria
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await log_audit(
+        db,
         action=AuditAction.BACKUP_SCHEDULE_CREATED,
+        user_id=current_user.id,
         resource_type="backup_schedule",
         resource_id=str(schedule.id),
         description=f"Agendamento de backup criado: {schedule.name}",
         ip_address=request.client.host if request.client else None,
         status="success",
-    ))
-    await db.commit()
+    )
     await db.refresh(schedule)
     await _reload_scheduler(schedule)
     return _schedule_to_dict(schedule)
@@ -299,16 +301,17 @@ async def update_schedule(
 
     schedule.updated_at = datetime.utcnow()
 
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await db.commit()
+    await log_audit(
+        db,
         action=AuditAction.BACKUP_SCHEDULE_UPDATED,
+        user_id=current_user.id,
         resource_type="backup_schedule",
         resource_id=str(schedule_id),
         description=f"Agendamento de backup atualizado: {schedule.name}",
         ip_address=request.client.host if request.client else None,
         status="success",
-    ))
-    await db.commit()
+    )
     await db.refresh(schedule)
     await _reload_scheduler(schedule)
     return _schedule_to_dict(schedule)
@@ -327,17 +330,18 @@ async def delete_schedule(
         raise HTTPException(status_code=404, detail="Agendamento não encontrado")
 
     name = schedule.name
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await db.delete(schedule)
+    await db.commit()
+    await log_audit(
+        db,
         action=AuditAction.BACKUP_SCHEDULE_DELETED,
+        user_id=current_user.id,
         resource_type="backup_schedule",
         resource_id=str(schedule_id),
         description=f"Agendamento de backup removido: {name}",
         ip_address=request.client.host if request.client else None,
         status="success",
-    ))
-    await db.delete(schedule)
-    await db.commit()
+    )
     await _reload_scheduler(None)
     return {"message": f"Agendamento '{name}' removido com sucesso"}
 
@@ -366,16 +370,17 @@ async def run_schedule_now(
         total_devices=len(schedule.device_ids or []),
     )
     db.add(execution)
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await db.commit()
+    await log_audit(
+        db,
         action=AuditAction.BACKUP_SCHEDULE_EXECUTED,
+        user_id=current_user.id,
         resource_type="backup_schedule",
         resource_id=str(schedule_id),
         description=f"Backup manual iniciado: {schedule.name}",
         ip_address=request.client.host if request.client else None,
         status="success",
-    ))
-    await db.commit()
+    )
     await db.refresh(execution)
 
     # Executar em background

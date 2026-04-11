@@ -15,7 +15,8 @@ from sqlalchemy import select
 from app.core.database import get_db
 from app.core.config import settings
 from app.models.user import User, UserRole
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 from app.api.v1.auth import require_admin
 from app.services.backup import backup_service
 
@@ -48,12 +49,12 @@ async def _auth_backup_create(
     token = auth_header.split(" ", 1)[1]
     payload = decode_token(token)
     if not payload:
-        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
-    result = await db.execute(select(User).where(User.id == payload.get("sub")))
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    user_id = payload.get("sub")
+    result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
     user = result.scalar_one_or_none()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="Usuário não encontrado")
-    if user.role != UserRole.ADMIN:
+    if not user or user.role.value != "admin":
         raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
     return user
 
@@ -83,30 +84,30 @@ async def create_backup(
 
     if not result:
         if not is_scheduled:
-            db.add(AuditLog(
-                user_id=auth_user.id,
+            await log_audit(
+                db,
                 action=AuditAction.BACKUP_CREATED,
+                user_id=auth_user.id,
                 description="Falha ao criar backup manual",
                 ip_address=request.client.host if request.client else None,
                 status="failure",
                 error_message="Falha ao criar backup. Verifique os logs do servidor.",
-            ))
-            await db.commit()
+            )
         raise HTTPException(
             status_code=500,
             detail="Falha ao criar backup. Verifique os logs do servidor."
         )
 
     if not is_scheduled:
-        db.add(AuditLog(
-            user_id=auth_user.id,
+        await log_audit(
+            db,
             action=AuditAction.BACKUP_CREATED,
+            user_id=auth_user.id,
             description=f"Backup manual criado: {result.get('filename', 'backup')}",
             ip_address=request.client.host if request.client else None,
             status="success",
             extra_data=result,
-        ))
-        await db.commit()
+        )
     else:
         # Backup agendado: limpar arquivos antigos automaticamente
         backup_service.cleanup_old_backups()
@@ -130,15 +131,14 @@ async def download_backup(
     if not os.path.exists(backup_path):
         raise HTTPException(status_code=404, detail="Arquivo de backup não encontrado")
 
-    # Log de download
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await log_audit(
+        db,
         action=AuditAction.EXPORT_DATA,
+        user_id=current_user.id,
         description=f"Download de backup: {filename}",
         ip_address=request.client.host if request.client else None,
         status="success",
-    ))
-    await db.commit()
+    )
 
     return FileResponse(
         path=backup_path,
@@ -157,28 +157,28 @@ async def restore_backup(
     """Restaura um backup do banco de dados."""
     success = backup_service.restore_backup(filename)
     if not success:
-        db.add(AuditLog(
-            user_id=current_user.id,
+        await log_audit(
+            db,
             action=AuditAction.BACKUP_RESTORED,
+            user_id=current_user.id,
             description=f"Falha ao restaurar backup: {filename}",
             ip_address=request.client.host if request.client else None,
             status="failure",
             error_message="Falha ao restaurar backup. Verifique os logs.",
-        ))
-        await db.commit()
+        )
         raise HTTPException(
             status_code=500,
             detail="Falha ao restaurar backup. Verifique os logs."
         )
 
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await log_audit(
+        db,
         action=AuditAction.BACKUP_RESTORED,
+        user_id=current_user.id,
         description=f"Backup restaurado: {filename}",
         ip_address=request.client.host if request.client else None,
         status="success",
-    ))
-    await db.commit()
+    )
 
     return {"message": f"Backup {filename} restaurado com sucesso"}
 
@@ -198,14 +198,14 @@ async def delete_backup(
 
     os.remove(backup_path)
 
-    db.add(AuditLog(
-        user_id=current_user.id,
+    await log_audit(
+        db,
         action=AuditAction.EXPORT_DATA,
+        user_id=current_user.id,
         description=f"Backup removido: {filename}",
         ip_address=request.client.host if request.client else None,
         status="success",
-    ))
-    await db.commit()
+    )
 
     return {"message": f"Backup {filename} removido com sucesso"}
 
@@ -218,6 +218,6 @@ async def cleanup_old_backups(
     """Remove backups mais antigos que o período de retenção."""
     removed = backup_service.cleanup_old_backups(retention_days)
     return {
-        "message": f"{removed} backup(s) antigo(s) removido(s)",
-        "retention_days": retention_days,
+        "message": f"{removed} backup(s) removido(s)",
+        "removed_count": removed,
     }

@@ -31,7 +31,8 @@ from app.core.database import get_db
 from app.api.v1.auth import get_current_user
 from app.models.user import User
 from app.models.rpki_monitor import RpkiMonitor, RpkiCheck
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 
 logger = logging.getLogger(__name__)
 
@@ -635,21 +636,16 @@ async def create_monitor(
     # Capturar dict antes de qualquer operação adicional
     monitor_dict = _monitor_to_dict(monitor)
 
-    # Auditoria (não-bloqueante)
-    try:
-        audit = AuditLog(
-            user_id=current_user.id,
-            action=AuditAction.RPKI_MONITOR_CREATED,
-            resource_type="rpki_monitor",
-            resource_id=str(monitor.id),
-            description=f"Monitor RPKI criado: {monitor.name} ({monitor.prefix})",
-            status="success",
-        )
-        db.add(audit)
-        await db.commit()
-    except Exception as e:
-        logger.warning(f"[RPKI] Falha ao registrar auditoria (create): {e}")
-        await db.rollback()
+    # Auditoria
+    await log_audit(
+        db,
+        action=AuditAction.RPKI_MONITOR_CREATED,
+        user_id=current_user.id,
+        resource_type="rpki_monitor",
+        resource_id=str(monitor.id),
+        description=f"Monitor RPKI criado: {monitor.name} ({monitor.prefix})",
+        status="success",
+    )
 
     return monitor_dict
 
@@ -693,21 +689,16 @@ async def update_monitor(
     # Capturar dict antes de qualquer operação adicional
     monitor_dict = _monitor_to_dict(monitor)
 
-    # Auditoria (não-bloqueante)
-    try:
-        audit = AuditLog(
-            user_id=current_user.id,
-            action=AuditAction.RPKI_MONITOR_UPDATED,
-            resource_type="rpki_monitor",
-            resource_id=str(monitor.id),
-            description=f"Monitor RPKI atualizado: {monitor.name} ({monitor.prefix})",
-            status="success",
-        )
-        db.add(audit)
-        await db.commit()
-    except Exception as e:
-        logger.warning(f"[RPKI] Falha ao registrar auditoria (update): {e}")
-        await db.rollback()
+    # Auditoria
+    await log_audit(
+        db,
+        action=AuditAction.RPKI_MONITOR_UPDATED,
+        user_id=current_user.id,
+        resource_type="rpki_monitor",
+        resource_id=str(monitor.id),
+        description=f"Monitor RPKI atualizado: {monitor.name} ({monitor.prefix})",
+        status="success",
+    )
 
     return monitor_dict
 
@@ -728,21 +719,16 @@ async def delete_monitor(
     await db.delete(monitor)
     await db.commit()
 
-    # Auditoria (não-bloqueante)
-    try:
-        audit = AuditLog(
-            user_id=current_user.id,
-            action=AuditAction.RPKI_MONITOR_DELETED,
-            resource_type="rpki_monitor",
-            resource_id=monitor_id_str,
-            description=f"Monitor RPKI removido: {monitor_name} ({monitor_prefix})",
-            status="success",
-        )
-        db.add(audit)
-        await db.commit()
-    except Exception as e:
-        logger.warning(f"[RPKI] Falha ao registrar auditoria (delete): {e}")
-        await db.rollback()
+    # Auditoria
+    await log_audit(
+        db,
+        action=AuditAction.RPKI_MONITOR_DELETED,
+        user_id=current_user.id,
+        resource_type="rpki_monitor",
+        resource_id=monitor_id_str,
+        description=f"Monitor RPKI removido: {monitor_name} ({monitor_prefix})",
+        status="success",
+    )
 
     return {"message": f"Monitor '{monitor_name}' removido com sucesso"}
 
@@ -783,22 +769,17 @@ async def check_monitor_now(
     # Capturar dict do check antes da auditoria
     check_dict = _check_to_dict(check)
 
-    # Auditoria (não-bloqueante)
-    try:
-        status_label = check.status or "unknown"
-        audit = AuditLog(
-            user_id=current_user.id,
-            action=AuditAction.RPKI_MONITOR_CHECKED,
-            resource_type="rpki_monitor",
-            resource_id=monitor_id_str,
-            description=f"Verificação RPKI hierárquica: {monitor_name} ({monitor_prefix}) → {status_label}",
-            status="success" if status_label not in ("error",) else "failure",
-        )
-        db.add(audit)
-        await db.commit()
-    except Exception as e:
-        logger.warning(f"[RPKI] Falha ao registrar auditoria (check): {e}")
-        await db.rollback()
+    # Auditoria
+    status_label = check_dict.get("status") or "unknown"
+    await log_audit(
+        db,
+        action=AuditAction.RPKI_MONITOR_CHECKED,
+        user_id=current_user.id,
+        resource_type="rpki_monitor",
+        resource_id=monitor_id_str,
+        description=f"Verificação RPKI hierárquica: {monitor_name} ({monitor_prefix}) → {status_label}",
+        status="success" if status_label not in ("error",) else "failure",
+    )
 
     # Reconstruir monitor_dict com dados frescos (evita MissingGreenlet na serialização)
     try:

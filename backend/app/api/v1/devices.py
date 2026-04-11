@@ -23,7 +23,8 @@ from app.models.device import (
     Device, DeviceVlan, DevicePort, DeviceCredential, DevicePhoto, DeviceBackup,
     DeviceType, DeviceStatus
 )
-from app.models.audit import AuditLog, AuditAction
+from app.models.audit import AuditAction
+from app.core.audit_helper import log_audit
 from app.schemas.device import (
     DeviceCreate, DeviceUpdate, DeviceResponse, DeviceListResponse,
     VlanCreate, VlanResponse, PortCreate, PortResponse,
@@ -173,18 +174,18 @@ async def create_device(
     db.add(device)
     await db.flush()
 
+    device_id_saved = device.id
+    await db.commit()
     # Log de auditoria
-    log = AuditLog(
-        user_id=current_user.id,
-        device_id=device.id,
+    await log_audit(
+        db,
         action=AuditAction.DEVICE_CREATED,
+        user_id=current_user.id,
+        device_id=device_id_saved,
         description=f"Dispositivo criado: {device.name} ({device.management_ip})",
         new_values=_sanitize_for_json({"name": device.name, "ip": device.management_ip, "type": device_data.device_type}),
         status="success",
     )
-    db.add(log)
-    device_id_saved = device.id
-    await db.commit()
     # Recarregar com relacionamentos para evitar DetachedInstanceError
     result2 = await db.execute(
         select(Device)
@@ -264,18 +265,18 @@ async def update_device(
     for field, value in update_dict.items():
         setattr(device, field, value)
 
-    log = AuditLog(
-        user_id=current_user.id,
-        device_id=device.id,
+    device_id_saved = device.id
+    await db.commit()
+    await log_audit(
+        db,
         action=AuditAction.DEVICE_UPDATED,
+        user_id=current_user.id,
+        device_id=device_id_saved,
         description=f"Dispositivo atualizado: {device.name}",
         old_values=_sanitize_for_json(old_values),
         new_values=_sanitize_for_json(update_dict),
         status="success",
     )
-    db.add(log)
-    device_id_saved = device.id
-    await db.commit()
 
     # Recarregar com relacionamentos para evitar DetachedInstanceError
     result2 = await db.execute(
@@ -309,16 +310,15 @@ async def delete_device(
     device_ip = device.management_ip
 
     await db.delete(device)
-
-    log = AuditLog(
-        user_id=current_user.id,
+    await db.commit()
+    await log_audit(
+        db,
         action=AuditAction.DEVICE_DELETED,
+        user_id=current_user.id,
         description=f"Dispositivo removido: {device_name} ({device_ip})",
         old_values={"name": device_name, "ip": device_ip},
         status="success",
     )
-    db.add(log)
-    await db.commit()
 
     return {"message": f"Dispositivo {device_name} removido com sucesso"}
 
