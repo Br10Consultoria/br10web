@@ -239,5 +239,27 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- Monitor RPKI
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'rpki_monitor_created' AND enumtypid = 'auditaction'::regtype) THEN
+    ALTER TYPE auditaction ADD VALUE 'rpki_monitor_created';
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'rpki_monitor_updated' AND enumtypid = 'auditaction'::regtype) THEN
+    ALTER TYPE auditaction ADD VALUE 'rpki_monitor_updated';
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'rpki_monitor_deleted' AND enumtypid = 'auditaction'::regtype) THEN
+    ALTER TYPE auditaction ADD VALUE 'rpki_monitor_deleted';
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'rpki_monitor_checked' AND enumtypid = 'auditaction'::regtype) THEN
+    ALTER TYPE auditaction ADD VALUE 'rpki_monitor_checked';
+  END IF;
+END $$;
+
 -- Verificação final
 SELECT enumlabel FROM pg_enum WHERE enumtypid = 'auditaction'::regtype ORDER BY enumsortorder;

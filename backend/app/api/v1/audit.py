@@ -5,7 +5,7 @@ Fornece acesso completo aos logs de auditoria com filtros avançados.
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, cast, String as SAString
 from sqlalchemy.orm import joinedload
 import logging
 
@@ -58,14 +58,13 @@ async def list_audit_logs(
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
 
-    # Filtro por ação — case-insensitive para compatibilidade com registros antigos (MAIÚSCULO)
+    # Filtro por ação — usa cast(action, String) para comparar ENUM com VARCHAR
+    # Busca case-insensitive: aceita 'login' e 'LOGIN' (registros antigos)
     if action:
-        action_upper = action.upper()
-        action_lower = action.lower()
+        action_col_as_str = cast(AuditLog.action, SAString)
         action_filter = or_(
-            AuditLog.action == action,
-            AuditLog.action == action_upper,
-            AuditLog.action == action_lower,
+            action_col_as_str == action.lower(),
+            action_col_as_str == action.upper(),
         )
         query = query.where(action_filter)
         count_query = count_query.where(action_filter)

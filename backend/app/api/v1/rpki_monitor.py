@@ -387,7 +387,7 @@ async def create_monitor(
     try:
         audit = AuditLog(
             user_id=current_user.id,
-            action=AuditAction.BACKUP_SCHEDULE_CREATED,
+            action=AuditAction.RPKI_MONITOR_CREATED,
             resource_type="rpki_monitor",
             resource_id=str(monitor.id),
             description=f"Monitor RPKI criado: {monitor.name} ({monitor.prefix})",
@@ -443,7 +443,7 @@ async def update_monitor(
     try:
         audit = AuditLog(
             user_id=current_user.id,
-            action=AuditAction.BACKUP_SCHEDULE_UPDATED,
+            action=AuditAction.RPKI_MONITOR_UPDATED,
             resource_type="rpki_monitor",
             resource_id=str(monitor.id),
             description=f"Monitor RPKI atualizado: {monitor.name} ({monitor.prefix})",
@@ -479,7 +479,7 @@ async def delete_monitor(
     try:
         audit = AuditLog(
             user_id=current_user.id,
-            action=AuditAction.BACKUP_SCHEDULE_DELETED,
+            action=AuditAction.RPKI_MONITOR_DELETED,
             resource_type="rpki_monitor",
             resource_id=monitor_id_str,
             description=f"Monitor RPKI removido: {monitor_name} ({monitor_prefix})",
@@ -513,7 +513,7 @@ async def check_monitor_now(
         status_label = check.status or "unknown"
         audit = AuditLog(
             user_id=current_user.id,
-            action=AuditAction.BACKUP_SCHEDULE_EXECUTED,
+            action=AuditAction.RPKI_MONITOR_CHECKED,
             resource_type="rpki_monitor",
             resource_id=str(monitor.id),
             description=f"Verificação RPKI manual: {monitor.name} ({monitor.prefix}) → {status_label}",

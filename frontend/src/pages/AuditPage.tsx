@@ -46,6 +46,11 @@ const ACTION_COLORS: Record<string, string> = {
   backup_schedule_updated: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
   backup_schedule_deleted: 'bg-red-500/10 text-red-400 border-red-500/20',
   backup_schedule_executed: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  // Monitor RPKI
+  rpki_monitor_created: 'bg-sky-500/10 text-sky-400 border-sky-500/20',
+  rpki_monitor_updated: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+  rpki_monitor_deleted: 'bg-red-500/10 text-red-400 border-red-500/20',
+  rpki_monitor_checked: 'bg-teal-500/10 text-teal-400 border-teal-500/20',
   // Usuários
   user_created: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
   user_updated: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
@@ -91,6 +96,10 @@ const ACTION_LABELS: Record<string, string> = {
   backup_schedule_updated: 'Agendamento Atualizado',
   backup_schedule_deleted: 'Agendamento Removido',
   backup_schedule_executed: 'Backup Executado',
+  rpki_monitor_created: 'Monitor RPKI Criado',
+  rpki_monitor_updated: 'Monitor RPKI Atualizado',
+  rpki_monitor_deleted: 'Monitor RPKI Removido',
+  rpki_monitor_checked: 'Verificação RPKI',
   user_created: 'Usuário Criado',
   user_updated: 'Usuário Atualizado',
   user_deleted: 'Usuário Removido',
@@ -110,6 +119,7 @@ const ACTION_GROUPS: Record<string, string[]> = {
   'Backup DB': ['backup_created', 'backup_restored'],
   'Playbooks': ['playbook_created', 'playbook_updated', 'playbook_deleted', 'playbook_executed'],
   'Backup Dispositivos': ['backup_schedule_created', 'backup_schedule_updated', 'backup_schedule_deleted', 'backup_schedule_executed'],
+  'Monitor RPKI': ['rpki_monitor_created', 'rpki_monitor_updated', 'rpki_monitor_deleted', 'rpki_monitor_checked'],
   'Usuários': ['user_created', 'user_updated', 'user_deleted'],
   'Rotas': ['route_created', 'route_updated', 'route_deleted'],
 }

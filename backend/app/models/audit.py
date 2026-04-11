@@ -74,6 +74,12 @@ class AuditAction(str, enum.Enum):
     BACKUP_SCHEDULE_DELETED = "backup_schedule_deleted"
     BACKUP_SCHEDULE_EXECUTED = "backup_schedule_executed"
 
+    # ── Monitor RPKI ──────────────────────────────────────────────────────────
+    RPKI_MONITOR_CREATED = "rpki_monitor_created"
+    RPKI_MONITOR_UPDATED = "rpki_monitor_updated"
+    RPKI_MONITOR_DELETED = "rpki_monitor_deleted"
+    RPKI_MONITOR_CHECKED = "rpki_monitor_checked"
+
     # ── Usuários ──────────────────────────────────────────────────────────────
     USER_CREATED = "user_created"
     USER_UPDATED = "user_updated"
