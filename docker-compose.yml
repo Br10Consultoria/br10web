@@ -66,6 +66,8 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - TZ=America/Bahia
     volumes:
+      - ./backend/app:/app/app  # Hot-reload: git pull + restart atualiza o código sem rebuild
+      - ./backend/entrypoint.sh:/entrypoint.sh  # Entrypoint atualizável sem rebuild
       - backend_backups:/app/backups
       - backend_uploads:/app/uploads
       - backend_logs:/app/logs
