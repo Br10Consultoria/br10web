@@ -1,8 +1,14 @@
 """
 BR10 NetManager - Audit Log Model
 Registro completo de auditoria de todas as ações do sistema.
+
+NOTA SOBRE O ENUM auditaction:
+O banco PostgreSQL tem registros antigos com valores em MAIÚSCULO (LOGIN, LOGOUT, etc.)
+e registros novos em minúsculo (login, logout, etc.). Para compatibilidade com ambos,
+a coluna 'action' usa String em vez de Enum SQLAlchemy — o AuditAction Python é usado
+apenas para escrever valores corretos (minúsculo), mas a leitura aceita qualquer string.
 """
-from sqlalchemy import Column, String, Text, Enum, ForeignKey, JSON
+from sqlalchemy import Column, String, Text, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import enum
@@ -83,11 +89,10 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
 
-    action = Column(
-        Enum(AuditAction, values_callable=lambda x: [e.value for e in x]),
-        nullable=False,
-        index=True
-    )
+    # Usa String em vez de Enum para compatibilidade com registros antigos (MAIÚSCULO)
+    # e novos (minúsculo). O AuditAction Python é usado apenas para escrever valores.
+    action = Column(String(100), nullable=False, index=True)
+
     resource_type = Column(String(100), nullable=True)
     resource_id = Column(String(255), nullable=True)
 
