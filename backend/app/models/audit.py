@@ -81,6 +81,11 @@ class AuditAction(str, enum.Enum):
     RPKI_MONITOR_DELETED = "rpki_monitor_deleted"
     RPKI_MONITOR_CHECKED = "rpki_monitor_checked"
 
+    # ── CGNAT ─────────────────────────────────────────────────────────────────
+    CGNAT_GENERATED = "cgnat_generated"
+    CGNAT_SAVED = "cgnat_saved"
+    CGNAT_DELETED = "cgnat_deleted"
+
     # ── Usuários ──────────────────────────────────────────────────────────────
     USER_CREATED = "user_created"
     USER_UPDATED = "user_updated"
