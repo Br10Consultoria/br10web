@@ -141,8 +141,11 @@ export default function CgnatPage() {
   const [configClientFilter, setConfigClientFilter] = useState('')
 
   // Lookup
-  const [lookupType, setLookupType] = useState<'private_ip' | 'public_ip' | 'port'>('private_ip')
-  const [lookupValue, setLookupValue] = useState('')
+  const [lookupType, setLookupType] = useState<'public_ip_port' | 'private_ip' | 'public_ip'>('public_ip_port')
+  const [lookupPublicIp, setLookupPublicIp] = useState('')
+  const [lookupPort, setLookupPort] = useState('')
+  const [lookupPrivateIp, setLookupPrivateIp] = useState('')
+  const [lookupClientId, setLookupClientId] = useState('')
   const [lookupResult, setLookupResult] = useState<LookupResult | null>(null)
   const [lookupLoading, setLookupLoading] = useState(false)
 
@@ -261,14 +264,42 @@ export default function CgnatPage() {
 
   // ── Lookup ─────────────────────────────────────────────────────────────────
 
+  const resetLookup = () => {
+    setLookupPublicIp('')
+    setLookupPort('')
+    setLookupPrivateIp('')
+    setLookupResult(null)
+  }
+
   const handleLookup = async () => {
-    if (!lookupValue.trim()) return
     setLookupLoading(true)
     try {
       const params = new URLSearchParams()
-      if (lookupType === 'private_ip') params.set('ip', lookupValue.trim())
-      else if (lookupType === 'public_ip') params.set('public_ip', lookupValue.trim())
-      else if (lookupType === 'port') params.set('port', lookupValue.trim())
+      if (lookupClientId) params.set('client_id', lookupClientId)
+
+      if (lookupType === 'public_ip_port') {
+        if (!lookupPublicIp.trim() || !lookupPort.trim()) {
+          toast.error('Informe o IP público e a porta')
+          setLookupLoading(false)
+          return
+        }
+        params.set('public_ip', lookupPublicIp.trim())
+        params.set('port', lookupPort.trim())
+      } else if (lookupType === 'private_ip') {
+        if (!lookupPrivateIp.trim()) {
+          toast.error('Informe o IP privado')
+          setLookupLoading(false)
+          return
+        }
+        params.set('ip', lookupPrivateIp.trim())
+      } else if (lookupType === 'public_ip') {
+        if (!lookupPublicIp.trim()) {
+          toast.error('Informe o IP público')
+          setLookupLoading(false)
+          return
+        }
+        params.set('public_ip', lookupPublicIp.trim())
+      }
 
       const res = await api.get(`/cgnat/lookup?${params}`)
       setLookupResult(res.data)
@@ -843,55 +874,117 @@ export default function CgnatPage() {
               Consultar Mapeamento CGNAT
             </h2>
 
-            {/* Tipo de consulta */}
-            <div className="flex gap-2 mb-4">
-              {[
-                { id: 'private_ip', label: 'IP Privado', placeholder: 'ex: 100.64.0.15' },
-                { id: 'public_ip', label: 'IP Público', placeholder: 'ex: 170.83.186.130' },
-                { id: 'port', label: 'Porta', placeholder: 'ex: 5432' },
-              ].map(opt => (
-                <button
-                  key={opt.id}
-                  onClick={() => { setLookupType(opt.id as any); setLookupValue(''); setLookupResult(null) }}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                    lookupType === opt.id
-                      ? 'bg-cyan-600 text-white'
-                      : 'bg-slate-700 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-
-            <p className="text-sm text-slate-400 mb-3">
-              {lookupType === 'private_ip' && 'Informe um IP privado para descobrir qual IP público e range de portas está mapeado.'}
-              {lookupType === 'public_ip' && 'Informe um IP público para ver todos os IPs privados mapeados a ele.'}
-              {lookupType === 'port' && 'Informe uma porta para descobrir qual IP privado usa essa porta no CGNAT.'}
-            </p>
-
-            <div className="flex gap-3">
-              <input
-                type={lookupType === 'port' ? 'number' : 'text'}
-                value={lookupValue}
-                onChange={e => setLookupValue(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleLookup()}
-                placeholder={
-                  lookupType === 'private_ip' ? 'ex: 100.64.0.15' :
-                  lookupType === 'public_ip' ? 'ex: 170.83.186.130' :
-                  'ex: 5432'
-                }
-                className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
-              />
-              <button
-                onClick={handleLookup}
-                disabled={lookupLoading || !lookupValue.trim()}
-                className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2 px-5 rounded-lg transition-colors disabled:opacity-50"
+            {/* Filtro por cliente */}
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Cliente (opcional)</label>
+              <select
+                value={lookupClientId}
+                onChange={e => { setLookupClientId(e.target.value); setLookupResult(null) }}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
               >
-                {lookupLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                Consultar
-              </button>
+                <option value="">Todos os clientes</option>
+                {clients?.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
+
+            {/* Tipo de consulta */}
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Tipo de consulta</label>
+              <div className="flex gap-2 flex-wrap">
+                {[
+                  { id: 'public_ip_port', label: 'IP Público + Porta' },
+                  { id: 'private_ip', label: 'IP Privado' },
+                  { id: 'public_ip', label: 'IP Público' },
+                ].map(opt => (
+                  <button
+                    key={opt.id}
+                    onClick={() => { setLookupType(opt.id as any); resetLookup() }}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      lookupType === opt.id
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-slate-700 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {lookupType === 'public_ip_port' && (
+              <div className="space-y-3 mb-4">
+                <p className="text-sm text-slate-400">
+                  Informe o <span className="text-cyan-300 font-medium">IP público</span> e a{' '}
+                  <span className="text-yellow-300 font-medium">porta</span> para descobrir qual{' '}
+                  <span className="text-green-300 font-medium">IP privado</span> estava usando essa conexão.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">IP Público</label>
+                    <input
+                      type="text"
+                      value={lookupPublicIp}
+                      onChange={e => setLookupPublicIp(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleLookup()}
+                      placeholder="ex: 170.83.186.130"
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Porta</label>
+                    <input
+                      type="number"
+                      value={lookupPort}
+                      onChange={e => setLookupPort(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleLookup()}
+                      placeholder="ex: 54321"
+                      min={1024}
+                      max={65535}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {lookupType === 'private_ip' && (
+              <div className="mb-4">
+                <label className="block text-xs text-slate-400 mb-1">IP Privado</label>
+                <input
+                  type="text"
+                  value={lookupPrivateIp}
+                  onChange={e => setLookupPrivateIp(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleLookup()}
+                  placeholder="ex: 100.64.0.15"
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
+                />
+              </div>
+            )}
+
+            {lookupType === 'public_ip' && (
+              <div className="mb-4">
+                <label className="block text-xs text-slate-400 mb-1">IP Público</label>
+                <input
+                  type="text"
+                  value={lookupPublicIp}
+                  onChange={e => setLookupPublicIp(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleLookup()}
+                  placeholder="ex: 170.83.186.130"
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
+                />
+              </div>
+            )}
+
+            <button
+              onClick={handleLookup}
+              disabled={lookupLoading}
+              className="w-full flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2.5 px-5 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {lookupLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Consultar
+            </button>
           </div>
 
           {lookupResult && (
@@ -903,25 +996,30 @@ export default function CgnatPage() {
                     {lookupResult.results.length} resultado(s) encontrado(s)
                   </div>
                   {lookupResult.results.map((r, i) => (
-                    <div key={i} className="bg-slate-900 rounded-lg p-4 space-y-3">
+                    <div key={i} className="bg-slate-900 rounded-lg p-4 space-y-4">
                       <div className="flex items-center justify-between">
                         <div className="text-sm font-medium text-white">{r.config_name}</div>
                         {r.client_name && (
-                          <div className="flex items-center gap-1 text-xs text-cyan-400">
+                          <div className="flex items-center gap-1 px-2 py-0.5 bg-cyan-900/40 rounded-full text-xs text-cyan-400">
                             <User className="w-3 h-3" />
                             {r.client_name}
                           </div>
                         )}
                       </div>
+                      {lookupType === 'public_ip_port' && (
+                        <div className="bg-green-900/30 border border-green-700/50 rounded-lg p-3 text-center">
+                          <div className="text-xs text-green-400 mb-1">IP Privado identificado</div>
+                          <div className="text-2xl font-mono font-bold text-green-300">{r.private_ip}</div>
+                          <div className="text-xs text-slate-400 mt-1">{r.private_subnet}</div>
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-                        <div>
-                          <div className="text-slate-400 text-xs">IP Privado</div>
-                          <div className="text-cyan-300 font-mono">{r.private_ip}</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400 text-xs">Sub-rede (Chain)</div>
-                          <div className="text-slate-300 font-mono">{r.private_subnet}</div>
-                        </div>
+                        {lookupType !== 'public_ip_port' && (
+                          <div>
+                            <div className="text-slate-400 text-xs">IP Privado</div>
+                            <div className="text-cyan-300 font-mono font-semibold">{r.private_ip}</div>
+                          </div>
+                        )}
                         <div>
                           <div className="text-slate-400 text-xs">IP Público</div>
                           <div className="text-green-300 font-mono font-semibold">{r.public_ip}</div>
@@ -935,6 +1033,10 @@ export default function CgnatPage() {
                         <div>
                           <div className="text-slate-400 text-xs">Chain RouterOS</div>
                           <div className="text-slate-300 font-mono">{r.chain_name}</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-400 text-xs">Sub-rede Privada</div>
+                          <div className="text-slate-300 font-mono">{r.private_subnet}</div>
                         </div>
                         <div>
                           <div className="text-slate-400 text-xs">Prefixo Público</div>
