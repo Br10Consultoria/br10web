@@ -30,6 +30,7 @@ from app.core.database import get_db
 from app.api.v1.auth import get_current_user
 from app.models.user import User
 from app.models.rpki_monitor import RpkiMonitor, RpkiCheck
+from app.models.audit import AuditLog, AuditAction
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +314,7 @@ async def _check_monitor(monitor: RpkiMonitor, db: AsyncSession, trigger_type: s
 
     await db.commit()
     await db.refresh(check)
+    await db.refresh(monitor)  # Recarregar atributos após commit (evita MissingGreenlet)
     return check
 
 
@@ -380,6 +382,22 @@ async def create_monitor(
     db.add(monitor)
     await db.commit()
     await db.refresh(monitor)
+
+    # Auditoria
+    try:
+        audit = AuditLog(
+            user_id=current_user.id,
+            action=AuditAction.BACKUP_SCHEDULE_CREATED,
+            resource_type="rpki_monitor",
+            resource_id=str(monitor.id),
+            description=f"Monitor RPKI criado: {monitor.name} ({monitor.prefix})",
+            status="success",
+        )
+        db.add(audit)
+        await db.commit()
+    except Exception:
+        pass
+
     return _monitor_to_dict(monitor)
 
 
@@ -418,6 +436,22 @@ async def update_monitor(
 
     await db.commit()
     await db.refresh(monitor)
+
+    # Auditoria
+    try:
+        audit = AuditLog(
+            user_id=current_user.id,
+            action=AuditAction.BACKUP_SCHEDULE_UPDATED,
+            resource_type="rpki_monitor",
+            resource_id=str(monitor.id),
+            description=f"Monitor RPKI atualizado: {monitor.name} ({monitor.prefix})",
+            status="success",
+        )
+        db.add(audit)
+        await db.commit()
+    except Exception:
+        pass
+
     return _monitor_to_dict(monitor)
 
 
@@ -431,9 +465,28 @@ async def delete_monitor(
     monitor = result.scalar_one_or_none()
     if not monitor:
         raise HTTPException(status_code=404, detail="Monitor não encontrado")
+    monitor_name = monitor.name
+    monitor_prefix = monitor.prefix
+    monitor_id_str = str(monitor.id)
     await db.delete(monitor)
     await db.commit()
-    return {"message": f"Monitor '{monitor.name}' removido com sucesso"}
+
+    # Auditoria
+    try:
+        audit = AuditLog(
+            user_id=current_user.id,
+            action=AuditAction.BACKUP_SCHEDULE_DELETED,
+            resource_type="rpki_monitor",
+            resource_id=monitor_id_str,
+            description=f"Monitor RPKI removido: {monitor_name} ({monitor_prefix})",
+            status="success",
+        )
+        db.add(audit)
+        await db.commit()
+    except Exception:
+        pass
+
+    return {"message": f"Monitor '{monitor_name}' removido com sucesso"}
 
 
 @router.post("/monitors/{monitor_id}/check")
@@ -449,6 +502,23 @@ async def check_monitor_now(
         raise HTTPException(status_code=404, detail="Monitor não encontrado")
 
     check = await _check_monitor(monitor, db, trigger_type="manual", triggered_by=current_user.id)
+
+    # Auditoria
+    try:
+        status_label = check.status or "unknown"
+        audit = AuditLog(
+            user_id=current_user.id,
+            action=AuditAction.BACKUP_SCHEDULE_EXECUTED,
+            resource_type="rpki_monitor",
+            resource_id=str(monitor.id),
+            description=f"Verificação RPKI manual: {monitor.name} ({monitor.prefix}) → {status_label}",
+            status="success" if status_label not in ("error",) else "error",
+        )
+        db.add(audit)
+        await db.commit()
+    except Exception:
+        pass
+
     return {
         "monitor": _monitor_to_dict(monitor),
         "check": _check_to_dict(check),
