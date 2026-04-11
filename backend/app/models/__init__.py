@@ -16,6 +16,7 @@ from app.models.backup_schedule import (
 )
 from app.models.rpki_monitor import RpkiMonitor, RpkiCheck
 from app.models.cgnat import CgnatConfig, CgnatMapping
+from app.models.permissions import UserPermission, UserClientScope, MODULES, ACCESS_LEVELS, MODULE_OPERATIONS
 from app.models.playbook import (
     Playbook, PlaybookStep, PlaybookExecution, PlaybookRunStatus,
     AIProviderConfig, AIAnalysis, AIAnalysisStatus, AIProvider,
@@ -43,4 +44,6 @@ __all__ = [
     "RpkiMonitor", "RpkiCheck",
     # CGNAT
     "CgnatConfig", "CgnatMapping",
+    # Permissões granulares
+    "UserPermission", "UserClientScope", "MODULES", "ACCESS_LEVELS", "MODULE_OPERATIONS",
 ]

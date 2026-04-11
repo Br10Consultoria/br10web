@@ -30,6 +30,7 @@ from app.api.v1.inspector_commands import router as inspector_commands_router
 from app.api.v1.device_backup import router as device_backup_router
 from app.api.v1.rpki_monitor import router as rpki_monitor_router
 from app.api.v1.cgnat import router as cgnat_router
+from app.api.v1.users import router as users_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -157,6 +158,7 @@ app.include_router(inspector_commands_router, prefix=API_PREFIX)
 app.include_router(device_backup_router, prefix=API_PREFIX)
 app.include_router(rpki_monitor_router, prefix=API_PREFIX)
 app.include_router(cgnat_router, prefix=API_PREFIX)
+app.include_router(users_router, prefix=API_PREFIX)
 
 # ─── Static Files ─────────────────────────────────────────────────────────────
 uploads_dir = settings.UPLOAD_DIR

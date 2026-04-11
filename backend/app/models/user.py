@@ -47,6 +47,8 @@ class User(Base, UUIDMixin, TimestampMixin):
     # Relationships
     audit_logs = relationship("AuditLog", back_populates="user", lazy="dynamic")
     sessions = relationship("UserSession", back_populates="user", lazy="dynamic")
+    permissions = relationship("UserPermission", back_populates="user", lazy="selectin", cascade="all, delete-orphan")
+    client_scopes = relationship("UserClientScope", back_populates="user", lazy="selectin", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.username} ({self.role})>"
