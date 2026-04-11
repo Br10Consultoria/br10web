@@ -51,6 +51,9 @@ class CgnatConfig(Base):
     ports_per_client = Column(Integer, nullable=True)
     total_chains = Column(Integer, nullable=True)
 
+    # Cliente associado
+    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
+
     # Auditoria
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

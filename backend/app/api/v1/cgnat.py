@@ -8,17 +8,19 @@ Endpoints:
   GET    /cgnat/configs/{id}          — detalhe de uma configuração
   DELETE /cgnat/configs/{id}          — remover configuração e mapeamentos
   GET    /cgnat/configs/{id}/script   — regenerar script de uma configuração salva
-  GET    /cgnat/configs/{id}/mappings — listar mapeamento de portas
-  GET    /cgnat/lookup                — consultar IP privado → IP público + portas
+  GET    /cgnat/configs/{id}/mappings — listar mapeamento de portas (filtros avançados)
+  GET    /cgnat/lookup                — consultar IP privado ou público → mapeamento
+  GET    /cgnat/clients               — listar clientes para seleção no formulário
 """
 import ipaddress
 import logging
-from typing import Optional, List
+import math
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -44,15 +46,16 @@ class CgnatGenerateRequest(BaseModel):
     """Parâmetros para geração de script CGNAT."""
     name: str
     description: Optional[str] = None
-    private_network: str          # ex: "100.64.0.0" (início do bloco privado)
-    public_prefix: str            # ex: "170.83.186.128/28"
-    clients_per_ip: int           # 8, 16, 32 ou 64
-    sequential_chain: int = 0     # offset para numeração das chains (padrão 0)
+    client_id: Optional[str] = None        # UUID do cliente associado (opcional)
+    private_network: str                   # ex: "100.64.0.0" (início do bloco privado)
+    public_prefix: str                     # ex: "170.83.186.128/28"
+    clients_per_ip: int                    # 8, 16, 32 ou 64
+    sequential_chain: int = 0              # offset para numeração das chains (padrão 0)
     use_blackhole: bool = True
     use_fasttrack: bool = True
-    protocol: str = "tcp_udp"     # tcp_udp | tcp_only
-    ros_version: str = "6"        # 6 | 7
-    save: bool = False            # True = salvar no banco
+    protocol: str = "tcp_udp"             # tcp_udp | tcp_only
+    ros_version: str = "6"                # 6 | 7
+    save: bool = False                     # True = salvar no banco
 
     @field_validator("clients_per_ip")
     @classmethod
@@ -104,49 +107,32 @@ def _calculate_cgnat_params(
 ) -> dict:
     """
     Calcula todos os parâmetros necessários para geração do script CGNAT.
-
-    Retorna um dict com:
-      - public_ips: lista de IPs públicos
-      - total_public_ips: quantidade de IPs públicos
-      - ports_per_client: portas por cliente
-      - total_private_ips: total de IPs privados (total_public_ips × clients_per_ip)
-      - chains: lista de chains com sub-redes privadas e ranges de porta
-      - private_subnets_by_24: dict {rede_24: [chains]}
-      - mappings: lista de {private_ip, public_ip, port_start, port_end, chain_index, chain_name}
     """
     public_net = ipaddress.ip_network(public_prefix_str, strict=False)
     public_ips = list(public_net.hosts()) if public_net.prefixlen < 32 else [public_net.network_address]
-    # Para /28: 16 hosts (sem network e broadcast)
-    # Para /29: 8 hosts, /27: 32 hosts, etc.
-    # Nota: ip_network.hosts() exclui network e broadcast automaticamente
     total_public_ips = len(public_ips)
 
     if total_public_ips == 0:
         raise ValueError("O prefixo público não contém IPs utilizáveis")
 
     # Portas por cliente
-    ports_per_client = TOTAL_PORTS // clients_per_ip  # ex: 64512 / 32 = 2016
+    ports_per_client = TOTAL_PORTS // clients_per_ip
 
     # Total de IPs privados = IPs públicos × clientes por IP
     total_private_ips = total_public_ips * clients_per_ip
 
-    # IPs privados: blocos de 16 IPs (/28 privado) por chain
-    # Cada chain agrupa 16 IPs privados mapeados para todos os IPs públicos
-    # Número de chains = total_private_ips / 16
-    private_block_size = total_public_ips  # cada chain tem tantos IPs quanto IPs públicos
+    # Tamanho do bloco privado por chain = número de IPs públicos
+    private_block_size = total_public_ips
     total_chains = total_private_ips // private_block_size  # = clients_per_ip
 
-    # Calcular o prefixlen do bloco privado por chain
-    # private_block_size IPs → prefixlen = 32 - log2(private_block_size)
-    import math
+    # Prefixlen do bloco privado por chain
     private_chain_prefixlen = 32 - int(math.log2(private_block_size))
-    # ex: 16 IPs → /28, 8 IPs → /29, 32 IPs → /27
 
     # Gerar IPs privados sequencialmente a partir de private_network
     private_start = ipaddress.ip_address(private_network_str)
     private_start_int = int(private_start)
 
-    # Construir chains
+    # Construir chains e mapeamentos
     chains = []
     mappings = []
 
@@ -154,12 +140,10 @@ def _calculate_cgnat_params(
         chain_number = sequential_chain + chain_idx
         chain_name = f"CGNAT_{chain_number}"
 
-        # Sub-rede privada desta chain
         subnet_start_int = private_start_int + chain_idx * private_block_size
         subnet_start = ipaddress.ip_address(subnet_start_int)
         private_subnet = f"{subnet_start}/{private_chain_prefixlen}"
 
-        # Range de portas desta chain
         port_start = PORT_START + chain_idx * ports_per_client
         port_end = port_start + ports_per_client - 1
 
@@ -171,7 +155,6 @@ def _calculate_cgnat_params(
             "port_end": port_end,
         })
 
-        # Mapeamento individual por IP privado
         for ip_offset in range(private_block_size):
             private_ip = str(ipaddress.ip_address(subnet_start_int + ip_offset))
             public_ip = str(public_ips[ip_offset % total_public_ips])
@@ -189,7 +172,6 @@ def _calculate_cgnat_params(
     private_subnets_by_24: dict = {}
     for chain in chains:
         subnet_net = ipaddress.ip_network(chain["private_subnet"], strict=False)
-        # Descobrir o /24 que contém esta subnet
         net_24 = ipaddress.ip_network(
             f"{subnet_net.network_address}/{min(24, private_chain_prefixlen)}", strict=False
         )
@@ -227,7 +209,6 @@ def _generate_ros_script(
     total_private_ips = params["total_private_ips"]
     ports_per_client = params["ports_per_client"]
 
-    # Calcular range de IPs privados
     private_start = ipaddress.ip_address(private_network)
     private_end = ipaddress.ip_address(int(private_start) + total_private_ips - 1)
 
@@ -258,7 +239,6 @@ def _generate_ros_script(
     # CGNAT — srcnat jump por /24 privado
     lines.append("#CGNAT")
     for net_24_str in params["private_subnets_by_24"]:
-        # Nome da chain: CGNAT_100_64_0 para 100.64.0.0/24
         net_24 = ipaddress.ip_network(net_24_str, strict=False)
         octets = str(net_24.network_address).split(".")
         chain_24_name = f"CGNAT_{'_'.join(octets)}"
@@ -304,6 +284,18 @@ def _generate_ros_script(
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
+@router.get("/clients")
+async def list_clients_for_cgnat(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Listar clientes ativos para seleção no formulário CGNAT."""
+    from app.models.client import Client
+    q = select(Client).where(Client.is_active == True).order_by(Client.name)
+    clients = (await db.execute(q)).scalars().all()
+    return [{"id": str(c.id), "name": c.name, "short_name": c.short_name} for c in clients]
+
+
 @router.post("/generate")
 async def generate_cgnat(
     req: CgnatGenerateRequest,
@@ -335,14 +327,30 @@ async def generate_cgnat(
     )
 
     config_id = None
+    client_name = None
 
     if req.save:
+        # Validar client_id se fornecido
+        client_uuid = None
+        if req.client_id:
+            try:
+                client_uuid = UUID(req.client_id)
+                from app.models.client import Client
+                client_obj = await db.get(Client, client_uuid)
+                if client_obj:
+                    client_name = client_obj.name
+                else:
+                    client_uuid = None
+            except Exception:
+                client_uuid = None
+
         # Salvar configuração
         config = CgnatConfig(
             name=req.name,
             description=req.description,
+            client_id=client_uuid,
             private_network=req.private_network,
-            private_prefix_len=32 - len(bin(params["total_private_ips"]).lstrip("0b")) + 1,
+            private_prefix_len=32 - int(math.log2(params["total_private_ips"])),
             public_prefix=req.public_prefix,
             clients_per_ip=req.clients_per_ip,
             sequential_chain=req.sequential_chain,
@@ -357,7 +365,7 @@ async def generate_cgnat(
             created_by=current_user.id,
         )
         db.add(config)
-        await db.flush()  # para obter config.id antes do commit
+        await db.flush()
 
         config_id = str(config.id)
 
@@ -382,7 +390,8 @@ async def generate_cgnat(
             user_id=current_user.id,
             action=AuditAction.CGNAT_SAVED,
             description=f"Configuração CGNAT salva: {req.name} ({req.public_prefix}, "
-                        f"{req.clients_per_ip} clientes/IP, {params['total_private_ips']} IPs privados)",
+                        f"{req.clients_per_ip} clientes/IP, {params['total_private_ips']} IPs privados)"
+                        + (f" — Cliente: {client_name}" if client_name else ""),
             status="success",
             extra_data={
                 "config_id": config_id,
@@ -391,6 +400,7 @@ async def generate_cgnat(
                 "total_private_ips": params["total_private_ips"],
                 "total_public_ips": params["total_public_ips"],
                 "ports_per_client": params["ports_per_client"],
+                "client_name": client_name,
             },
         )
 
@@ -416,23 +426,47 @@ async def generate_cgnat(
 async def list_cgnat_configs(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    client_id: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Listar configurações CGNAT salvas."""
+    """Listar configurações CGNAT salvas com filtros opcionais."""
+    q = select(CgnatConfig)
     count_q = select(func.count(CgnatConfig.id))
-    total = (await db.execute(count_q)).scalar()
 
-    q = (
-        select(CgnatConfig)
-        .order_by(CgnatConfig.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-    )
+    if client_id:
+        try:
+            cid = UUID(client_id)
+            q = q.where(CgnatConfig.client_id == cid)
+            count_q = count_q.where(CgnatConfig.client_id == cid)
+        except Exception:
+            pass
+
+    if search:
+        sf = or_(
+            CgnatConfig.name.ilike(f"%{search}%"),
+            CgnatConfig.public_prefix.ilike(f"%{search}%"),
+            CgnatConfig.private_network.ilike(f"%{search}%"),
+        )
+        q = q.where(sf)
+        count_q = count_q.where(sf)
+
+    total = (await db.execute(count_q)).scalar()
+    q = q.order_by(CgnatConfig.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
     configs = (await db.execute(q)).scalars().all()
 
+    # Buscar nomes dos clientes
+    client_names: dict = {}
+    client_ids = [c.client_id for c in configs if c.client_id]
+    if client_ids:
+        from app.models.client import Client
+        cr = await db.execute(select(Client).where(Client.id.in_(client_ids)))
+        for cl in cr.scalars().all():
+            client_names[str(cl.id)] = cl.name
+
     return {
-        "items": [_config_to_dict(c) for c in configs],
+        "items": [_config_to_dict(c, client_names) for c in configs],
         "total": total,
         "page": page,
         "per_page": per_page,
@@ -450,7 +484,15 @@ async def get_cgnat_config(
     config = await db.get(CgnatConfig, config_id)
     if not config:
         raise HTTPException(status_code=404, detail="Configuração não encontrada")
-    return _config_to_dict(config)
+
+    client_names: dict = {}
+    if config.client_id:
+        from app.models.client import Client
+        cl = await db.get(Client, config.client_id)
+        if cl:
+            client_names[str(cl.id)] = cl.name
+
+    return _config_to_dict(config, client_names)
 
 
 @router.delete("/configs/{config_id}")
@@ -514,7 +556,14 @@ async def get_cgnat_script(
         clients_per_ip=config.clients_per_ip,
     )
 
-    return {"script": script, "config": _config_to_dict(config)}
+    client_names: dict = {}
+    if config.client_id:
+        from app.models.client import Client
+        cl = await db.get(Client, config.client_id)
+        if cl:
+            client_names[str(cl.id)] = cl.name
+
+    return {"script": script, "config": _config_to_dict(config, client_names)}
 
 
 @router.get("/configs/{config_id}/mappings")
@@ -522,11 +571,25 @@ async def get_cgnat_mappings(
     config_id: UUID,
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=500),
-    search: Optional[str] = Query(None, description="Buscar por IP privado ou público"),
+    # Filtros avançados
+    private_ip: Optional[str] = Query(None, description="Filtrar por IP privado (parcial)"),
+    public_ip: Optional[str] = Query(None, description="Filtrar por IP público (parcial)"),
+    port: Optional[int] = Query(None, description="Filtrar por número de porta (dentro do range)"),
+    chain: Optional[str] = Query(None, description="Filtrar por nome da chain"),
+    search: Optional[str] = Query(None, description="Busca geral: IP privado, público ou chain"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Listar mapeamento de portas de uma configuração CGNAT."""
+    """
+    Listar mapeamento de portas de uma configuração CGNAT.
+
+    Filtros disponíveis:
+    - private_ip: filtra por IP privado (busca parcial)
+    - public_ip: filtra por IP público (busca parcial)
+    - port: filtra mapeamentos que contêm a porta informada no range (port_start <= port <= port_end)
+    - chain: filtra por nome da chain (busca parcial)
+    - search: busca geral em IP privado, IP público e chain
+    """
     config = await db.get(CgnatConfig, config_id)
     if not config:
         raise HTTPException(status_code=404, detail="Configuração não encontrada")
@@ -534,15 +597,38 @@ async def get_cgnat_mappings(
     q = select(CgnatMapping).where(CgnatMapping.config_id == config_id)
     count_q = select(func.count(CgnatMapping.id)).where(CgnatMapping.config_id == config_id)
 
-    if search:
-        from sqlalchemy import or_
-        search_filter = or_(
+    filters = []
+
+    if private_ip:
+        filters.append(CgnatMapping.private_ip.ilike(f"%{private_ip}%"))
+
+    if public_ip:
+        filters.append(CgnatMapping.public_ip.ilike(f"%{public_ip}%"))
+
+    if port is not None:
+        # Porta deve estar dentro do range (port_start <= port <= port_end)
+        filters.append(and_(
+            CgnatMapping.port_start <= port,
+            CgnatMapping.port_end >= port,
+        ))
+
+    if chain:
+        filters.append(CgnatMapping.chain_name.ilike(f"%{chain}%"))
+
+    if search and not (private_ip or public_ip or port or chain):
+        # Busca geral só se não houver filtros específicos
+        filters.append(or_(
             CgnatMapping.private_ip.ilike(f"%{search}%"),
             CgnatMapping.public_ip.ilike(f"%{search}%"),
             CgnatMapping.chain_name.ilike(f"%{search}%"),
-        )
-        q = q.where(search_filter)
-        count_q = count_q.where(search_filter)
+        ))
+
+    if filters:
+        combined = filters[0]
+        for f in filters[1:]:
+            combined = and_(combined, f)
+        q = q.where(combined)
+        count_q = count_q.where(combined)
 
     q = q.order_by(CgnatMapping.chain_index, CgnatMapping.private_ip)
     total = (await db.execute(count_q)).scalar()
@@ -550,7 +636,14 @@ async def get_cgnat_mappings(
     mappings = (await db.execute(q)).scalars().all()
 
     return {
-        "config": _config_to_dict(config),
+        "config": {
+            "id": str(config.id),
+            "name": config.name,
+            "public_prefix": config.public_prefix,
+            "private_network": config.private_network,
+            "clients_per_ip": config.clients_per_ip,
+            "ports_per_client": config.ports_per_client,
+        },
         "items": [_mapping_to_dict(m) for m in mappings],
         "total": total,
         "page": page,
@@ -561,32 +654,74 @@ async def get_cgnat_mappings(
 
 @router.get("/lookup")
 async def lookup_cgnat(
-    ip: str = Query(..., description="IP privado para consultar"),
+    ip: Optional[str] = Query(None, description="IP privado para consultar"),
+    public_ip: Optional[str] = Query(None, description="IP público para consultar"),
+    port: Optional[int] = Query(None, description="Porta para consultar (retorna o IP privado mapeado)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Consultar qual IP público e range de portas está mapeado para um IP privado.
-    Retorna todos os mapeamentos encontrados (pode estar em múltiplas configurações).
+    Consultar mapeamento CGNAT por:
+    - ip: IP privado exato
+    - public_ip: IP público (retorna todos os privados mapeados)
+    - port: porta específica (retorna o IP privado que usa essa porta)
     """
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="IP inválido")
+    if not ip and not public_ip and port is None:
+        raise HTTPException(status_code=400, detail="Informe ao menos um parâmetro: ip, public_ip ou port")
 
     q = (
         select(CgnatMapping, CgnatConfig)
         .join(CgnatConfig, CgnatMapping.config_id == CgnatConfig.id)
-        .where(CgnatMapping.private_ip == ip)
-        .order_by(CgnatConfig.created_at.desc())
     )
+
+    filters = []
+
+    if ip:
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="IP privado inválido")
+        filters.append(CgnatMapping.private_ip == ip)
+
+    if public_ip:
+        try:
+            ipaddress.ip_address(public_ip)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="IP público inválido")
+        filters.append(CgnatMapping.public_ip == public_ip)
+
+    if port is not None:
+        if port < 1 or port > 65535:
+            raise HTTPException(status_code=400, detail="Porta deve estar entre 1 e 65535")
+        filters.append(and_(
+            CgnatMapping.port_start <= port,
+            CgnatMapping.port_end >= port,
+        ))
+
+    if filters:
+        combined = filters[0]
+        for f in filters[1:]:
+            combined = and_(combined, f)
+        q = q.where(combined)
+
+    q = q.order_by(CgnatConfig.created_at.desc())
     rows = (await db.execute(q)).all()
+
+    # Buscar nomes dos clientes
+    client_names: dict = {}
+    client_ids = [config.client_id for _, config in rows if config.client_id]
+    if client_ids:
+        from app.models.client import Client
+        cr = await db.execute(select(Client).where(Client.id.in_(client_ids)))
+        for cl in cr.scalars().all():
+            client_names[str(cl.id)] = cl.name
 
     results = []
     for mapping, config in rows:
         results.append({
             "config_id": str(config.id),
             "config_name": config.name,
+            "client_name": client_names.get(str(config.client_id)) if config.client_id else None,
             "private_ip": mapping.private_ip,
             "private_subnet": mapping.private_subnet,
             "public_ip": mapping.public_ip,
@@ -596,16 +731,23 @@ async def lookup_cgnat(
             "public_prefix": config.public_prefix,
         })
 
-    return {"ip": ip, "results": results, "found": len(results) > 0}
+    return {
+        "query": {"ip": ip, "public_ip": public_ip, "port": port},
+        "results": results,
+        "found": len(results) > 0,
+    }
 
 
 # ─── Helpers de serialização ──────────────────────────────────────────────────
 
-def _config_to_dict(c: CgnatConfig) -> dict:
+def _config_to_dict(c: CgnatConfig, client_names: dict = None) -> dict:
+    client_names = client_names or {}
     return {
         "id": str(c.id),
         "name": c.name,
         "description": c.description,
+        "client_id": str(c.client_id) if c.client_id else None,
+        "client_name": client_names.get(str(c.client_id)) if c.client_id else None,
         "private_network": c.private_network,
         "public_prefix": c.public_prefix,
         "clients_per_ip": c.clients_per_ip,

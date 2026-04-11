@@ -1,25 +1,32 @@
 /**
  * BR10 NetManager — Gerador CGNAT
  *
- * Gera scripts RouterOS para CGNAT com:
- * - 8, 16, 32 ou 64 clientes por IP público
- * - Blackhole, Fasttrack, protocolos TCP/UDP ou apenas TCP
- * - RouterOS v6 ou v7
- * - Armazenamento do mapeamento de portas por IP privado
- * - Consulta de IP privado → IP público + portas
+ * Funcionalidades:
+ * - Geração de scripts RouterOS para CGNAT (8/16/32/64 clientes por IP)
+ * - Vinculação a cliente cadastrado
+ * - Armazenamento do mapeamento completo de portas
+ * - Filtros avançados: IP privado, IP público, porta, chain
+ * - Consulta de IP (privado ou público) e porta
+ * - Exportação do script como .rsc para MikroTik
+ * - Cópia do script para área de transferência
  */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Network, Plus, RefreshCw, Trash2, Copy, Download, Search,
-  ChevronDown, ChevronUp, X, Loader2, CheckCircle, List,
-  Settings, Code, Table2, Eye, Save, AlertTriangle
+  X, Loader2, CheckCircle, List, Settings, Code, Table2, Eye,
+  Save, AlertTriangle, Filter, ChevronLeft, ChevronRight, User
 } from 'lucide-react'
 import api from '../utils/api'
-import { useAuthStore } from '../store/authStore'
 import toast from 'react-hot-toast'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
+
+interface ClientOption {
+  id: string
+  name: string
+  short_name?: string
+}
 
 interface CgnatStats {
   total_private_ips: number
@@ -42,6 +49,8 @@ interface CgnatConfig {
   id: string
   name: string
   description?: string
+  client_id?: string
+  client_name?: string
   private_network: string
   public_prefix: string
   clients_per_ip: number
@@ -69,11 +78,12 @@ interface CgnatMappingItem {
 }
 
 interface LookupResult {
-  ip: string
+  query: { ip?: string; public_ip?: string; port?: number }
   found: boolean
   results: Array<{
     config_id: string
     config_name: string
+    client_name?: string
     private_ip: string
     private_subnet: string
     public_ip: string
@@ -84,11 +94,12 @@ interface LookupResult {
   }>
 }
 
-// ─── Formulário de geração ────────────────────────────────────────────────────
+// ─── Formulário padrão ────────────────────────────────────────────────────────
 
 const DEFAULT_FORM = {
   name: '',
   description: '',
+  client_id: '',
   private_network: '100.64.0.0',
   public_prefix: '',
   clients_per_ip: 32,
@@ -97,19 +108,17 @@ const DEFAULT_FORM = {
   use_fasttrack: true,
   protocol: 'tcp_udp',
   ros_version: '6',
-  save: false,
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function CgnatPage() {
-  const { user } = useAuthStore()
   const queryClient = useQueryClient()
 
-  // Abas
+  // Abas principais
   const [activeTab, setActiveTab] = useState<'generator' | 'configs' | 'lookup'>('generator')
 
-  // Formulário
+  // Formulário de geração
   const [form, setForm] = useState({ ...DEFAULT_FORM })
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
@@ -119,26 +128,55 @@ export default function CgnatPage() {
 
   // Modal de mapeamento de config salva
   const [mappingModal, setMappingModal] = useState<CgnatConfig | null>(null)
-  const [mappingSearch, setMappingSearch] = useState('')
+  const [mappingFilters, setMappingFilters] = useState({
+    private_ip: '',
+    public_ip: '',
+    port: '',
+    chain: '',
+  })
   const [mappingPage, setMappingPage] = useState(1)
 
+  // Filtro de configs salvas
+  const [configSearch, setConfigSearch] = useState('')
+  const [configClientFilter, setConfigClientFilter] = useState('')
+
   // Lookup
-  const [lookupIp, setLookupIp] = useState('')
+  const [lookupType, setLookupType] = useState<'private_ip' | 'public_ip' | 'port'>('private_ip')
+  const [lookupValue, setLookupValue] = useState('')
   const [lookupResult, setLookupResult] = useState<LookupResult | null>(null)
   const [lookupLoading, setLookupLoading] = useState(false)
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
+  const { data: clients } = useQuery<ClientOption[]>({
+    queryKey: ['cgnat-clients'],
+    queryFn: () => api.get('/cgnat/clients').then(r => r.data),
+  })
+
   const { data: configsData, isLoading: configsLoading } = useQuery({
-    queryKey: ['cgnat-configs'],
-    queryFn: () => api.get('/cgnat/configs?per_page=50').then(r => r.data),
+    queryKey: ['cgnat-configs', configSearch, configClientFilter],
+    queryFn: () => {
+      const params = new URLSearchParams({ per_page: '50' })
+      if (configSearch) params.set('search', configSearch)
+      if (configClientFilter) params.set('client_id', configClientFilter)
+      return api.get(`/cgnat/configs?${params}`).then(r => r.data)
+    },
     enabled: activeTab === 'configs',
   })
 
+  const mappingQueryParams = useCallback(() => {
+    const params = new URLSearchParams({ page: String(mappingPage), per_page: '100' })
+    if (mappingFilters.private_ip) params.set('private_ip', mappingFilters.private_ip)
+    if (mappingFilters.public_ip) params.set('public_ip', mappingFilters.public_ip)
+    if (mappingFilters.port) params.set('port', mappingFilters.port)
+    if (mappingFilters.chain) params.set('chain', mappingFilters.chain)
+    return params.toString()
+  }, [mappingFilters, mappingPage])
+
   const { data: mappingData, isLoading: mappingLoading } = useQuery({
-    queryKey: ['cgnat-mappings', mappingModal?.id, mappingPage, mappingSearch],
+    queryKey: ['cgnat-mappings', mappingModal?.id, mappingFilters, mappingPage],
     queryFn: () => api.get(
-      `/cgnat/configs/${mappingModal!.id}/mappings?page=${mappingPage}&per_page=100${mappingSearch ? `&search=${encodeURIComponent(mappingSearch)}` : ''}`
+      `/cgnat/configs/${mappingModal!.id}/mappings?${mappingQueryParams()}`
     ).then(r => r.data),
     enabled: !!mappingModal,
   })
@@ -146,7 +184,8 @@ export default function CgnatPage() {
   // ── Mutations ──────────────────────────────────────────────────────────────
 
   const generateMutation = useMutation({
-    mutationFn: (data: typeof form) => api.post('/cgnat/generate', data).then(r => r.data),
+    mutationFn: (data: typeof form & { save: boolean }) =>
+      api.post('/cgnat/generate', data).then(r => r.data),
     onSuccess: (data: CgnatGenerateResult) => {
       setResult(data)
       setResultTab('script')
@@ -201,13 +240,11 @@ export default function CgnatPage() {
     if (!form.public_prefix.trim()) errors.public_prefix = 'Prefixo público é obrigatório'
     if (!form.private_network.trim()) errors.private_network = 'Rede privada é obrigatória'
 
-    // Validar formato do prefixo público
     const prefixRegex = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/
     if (form.public_prefix && !prefixRegex.test(form.public_prefix.trim())) {
       errors.public_prefix = 'Formato inválido. Use: 170.83.186.128/28'
     }
 
-    // Validar IP privado
     const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/
     if (form.private_network && !ipRegex.test(form.private_network.trim())) {
       errors.private_network = 'Formato inválido. Use: 100.64.0.0'
@@ -225,13 +262,19 @@ export default function CgnatPage() {
   // ── Lookup ─────────────────────────────────────────────────────────────────
 
   const handleLookup = async () => {
-    if (!lookupIp.trim()) return
+    if (!lookupValue.trim()) return
     setLookupLoading(true)
     try {
-      const res = await api.get(`/cgnat/lookup?ip=${encodeURIComponent(lookupIp.trim())}`)
+      const params = new URLSearchParams()
+      if (lookupType === 'private_ip') params.set('ip', lookupValue.trim())
+      else if (lookupType === 'public_ip') params.set('public_ip', lookupValue.trim())
+      else if (lookupType === 'port') params.set('port', lookupValue.trim())
+
+      const res = await api.get(`/cgnat/lookup?${params}`)
       setLookupResult(res.data)
-    } catch {
-      toast.error('Erro ao consultar IP')
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Erro ao consultar'
+      toast.error(msg)
     } finally {
       setLookupLoading(false)
     }
@@ -245,21 +288,37 @@ export default function CgnatPage() {
     toast.success('Script copiado!')
   }
 
-  const downloadScript = () => {
-    if (!result?.script) return
-    const blob = new Blob([result.script], { type: 'text/plain' })
+  const downloadScript = (script: string, prefix: string) => {
+    const blob = new Blob([script], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `cgnat_${form.public_prefix.replace(/[./]/g, '_')}.rsc`
+    a.download = `cgnat_${prefix.replace(/[./]/g, '_')}.rsc`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  const downloadSavedScript = async (cfg: CgnatConfig) => {
+    try {
+      const res = await api.get(`/cgnat/configs/${cfg.id}/script`)
+      downloadScript(res.data.script, cfg.public_prefix)
+      toast.success('Script baixado!')
+    } catch {
+      toast.error('Erro ao baixar script')
+    }
   }
 
   const clientsLabel = (n: number) => {
     const ports = Math.floor(64512 / n)
     return `${n} clientes [~${ports} portas]`
   }
+
+  const resetMappingFilters = () => {
+    setMappingFilters({ private_ip: '', public_ip: '', port: '', chain: '' })
+    setMappingPage(1)
+  }
+
+  const hasActiveFilters = Object.values(mappingFilters).some(v => v !== '')
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -273,7 +332,7 @@ export default function CgnatPage() {
             Gerador CGNAT
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Gera scripts RouterOS para CGNAT com mapeamento de portas por cliente
+            Gera scripts RouterOS para CGNAT com mapeamento completo de portas por cliente
           </p>
         </div>
       </div>
@@ -283,7 +342,7 @@ export default function CgnatPage() {
         {[
           { id: 'generator', label: 'Gerador', icon: Code },
           { id: 'configs', label: 'Configurações Salvas', icon: List },
-          { id: 'lookup', label: 'Consultar IP', icon: Search },
+          { id: 'lookup', label: 'Consultar', icon: Search },
         ].map(tab => {
           const Icon = tab.icon
           return (
@@ -328,6 +387,26 @@ export default function CgnatPage() {
                 }`}
               />
               {formErrors.name && <p className="text-red-400 text-xs mt-1">{formErrors.name}</p>}
+            </div>
+
+            {/* Cliente */}
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1 flex items-center gap-1">
+                <User className="w-3.5 h-3.5" />
+                Cliente (opcional)
+              </label>
+              <select
+                value={form.client_id}
+                onChange={e => setForm(f => ({ ...f, client_id: e.target.value }))}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              >
+                <option value="">— Sem cliente associado —</option>
+                {clients?.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.short_name ? ` (${c.short_name})` : ''}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* Rede privada + Prefixo público */}
@@ -487,11 +566,7 @@ export default function CgnatPage() {
                 disabled={generateMutation.isPending}
                 className="flex-1 flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors disabled:opacity-50"
               >
-                {generateMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Code className="w-4 h-4" />
-                )}
+                {generateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Code className="w-4 h-4" />}
                 Gerar Script
               </button>
               <button
@@ -499,18 +574,14 @@ export default function CgnatPage() {
                 disabled={generateMutation.isPending}
                 className="flex-1 flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2.5 px-4 rounded-lg transition-colors disabled:opacity-50"
               >
-                {generateMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Save className="w-4 h-4" />
-                )}
+                {generateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 Gerar e Salvar
               </button>
             </div>
           </div>
 
           {/* Resultado */}
-          <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col min-h-[500px]">
             {result ? (
               <>
                 {/* Stats */}
@@ -557,81 +628,73 @@ export default function CgnatPage() {
                     }`}
                   >
                     <Table2 className="w-4 h-4" />
-                    Mapeamento de Portas
+                    Mapeamento
                     {result.mappings.length > 0 && (
-                      <span className="bg-slate-700 text-slate-300 text-xs px-1.5 py-0.5 rounded-full">
+                      <span className="bg-cyan-600 text-white text-xs px-1.5 py-0.5 rounded-full">
                         {result.mappings.length}
                       </span>
                     )}
                   </button>
+
+                  {/* Ações */}
+                  <div className="ml-auto flex items-center gap-1 pr-3">
+                    <button
+                      onClick={copyScript}
+                      title="Copiar script"
+                      className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => downloadScript(result.script, form.public_prefix)}
+                      title="Baixar como .rsc (MikroTik)"
+                      className="p-2 text-slate-400 hover:text-green-400 hover:bg-slate-700 rounded transition-colors"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
-                {resultTab === 'script' && (
-                  <div className="flex flex-col flex-1 min-h-0">
-                    <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-700">
-                      <button
-                        onClick={copyScript}
-                        className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
-                      >
-                        <Copy className="w-3.5 h-3.5" /> Copiar
-                      </button>
-                      <button
-                        onClick={downloadScript}
-                        className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
-                      >
-                        <Download className="w-3.5 h-3.5" /> Download .rsc
-                      </button>
-                      {result.saved && (
-                        <span className="ml-auto flex items-center gap-1 text-xs text-green-400">
-                          <CheckCircle className="w-3.5 h-3.5" /> Salvo
-                        </span>
-                      )}
-                    </div>
-                    <pre className="flex-1 overflow-auto p-4 text-xs text-green-300 font-mono leading-relaxed bg-slate-950 rounded-b-xl whitespace-pre-wrap">
+                {/* Conteúdo do resultado */}
+                <div className="flex-1 overflow-auto">
+                  {resultTab === 'script' ? (
+                    <pre className="p-4 text-xs font-mono text-green-300 whitespace-pre-wrap leading-relaxed">
                       {result.script}
                     </pre>
-                  </div>
-                )}
-
-                {resultTab === 'mapping' && (
-                  <div className="flex-1 overflow-auto">
-                    {result.mappings.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-40 text-slate-500">
-                        <Table2 className="w-8 h-8 mb-2 opacity-40" />
-                        <p className="text-sm">
-                          {result.saved
-                            ? 'Mapeamento salvo no banco. Use "Configurações Salvas" para consultar.'
-                            : 'Clique em "Gerar e Salvar" para armazenar o mapeamento.'}
-                        </p>
-                      </div>
-                    ) : (
-                      <table className="w-full text-xs">
-                        <thead className="bg-slate-900 sticky top-0">
-                          <tr>
-                            <th className="px-3 py-2 text-left text-slate-400 font-medium">IP Privado</th>
-                            <th className="px-3 py-2 text-left text-slate-400 font-medium">Sub-rede</th>
-                            <th className="px-3 py-2 text-left text-slate-400 font-medium">IP Público</th>
-                            <th className="px-3 py-2 text-left text-slate-400 font-medium">Portas</th>
-                            <th className="px-3 py-2 text-left text-slate-400 font-medium">Chain</th>
+                  ) : result.mappings.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-40 text-slate-500 gap-2">
+                      <Table2 className="w-8 h-8 opacity-30" />
+                      <p className="text-sm">
+                        {result.saved
+                          ? 'Mapeamento salvo. Use "Configurações Salvas" para consultar.'
+                          : 'Clique em "Gerar e Salvar" para armazenar o mapeamento.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-900 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-slate-400 font-medium">IP Privado</th>
+                          <th className="px-3 py-2 text-left text-slate-400 font-medium">Sub-rede</th>
+                          <th className="px-3 py-2 text-left text-slate-400 font-medium">IP Público</th>
+                          <th className="px-3 py-2 text-left text-slate-400 font-medium">Portas</th>
+                          <th className="px-3 py-2 text-left text-slate-400 font-medium">Chain</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.mappings.map((m, i) => (
+                          <tr key={i} className={i % 2 === 0 ? 'bg-slate-800' : 'bg-slate-800/50'}>
+                            <td className="px-3 py-1.5 text-cyan-300 font-mono">{m.private_ip}</td>
+                            <td className="px-3 py-1.5 text-slate-400 font-mono">{m.private_subnet}</td>
+                            <td className="px-3 py-1.5 text-green-300 font-mono">{m.public_ip}</td>
+                            <td className="px-3 py-1.5 text-yellow-300 font-mono">{m.port_start}–{m.port_end}</td>
+                            <td className="px-3 py-1.5 text-slate-400">{m.chain_name}</td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {result.mappings.map((m, i) => (
-                            <tr key={i} className={i % 2 === 0 ? 'bg-slate-800' : 'bg-slate-850'}>
-                              <td className="px-3 py-1.5 text-cyan-300 font-mono">{m.private_ip}</td>
-                              <td className="px-3 py-1.5 text-slate-400 font-mono">{m.private_subnet}</td>
-                              <td className="px-3 py-1.5 text-green-300 font-mono">{m.public_ip}</td>
-                              <td className="px-3 py-1.5 text-yellow-300 font-mono">
-                                {m.port_start}–{m.port_end}
-                              </td>
-                              <td className="px-3 py-1.5 text-slate-400">{m.chain_name}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                )}
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </>
             ) : (
               <div className="flex flex-col items-center justify-center flex-1 p-12 text-slate-500">
@@ -649,6 +712,30 @@ export default function CgnatPage() {
       {/* ── ABA: CONFIGURAÇÕES SALVAS ─────────────────────────────────────── */}
       {activeTab === 'configs' && (
         <div className="space-y-4">
+          {/* Filtros */}
+          <div className="flex flex-wrap gap-3">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={configSearch}
+                onChange={e => setConfigSearch(e.target.value)}
+                placeholder="Buscar por nome, prefixo..."
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              />
+            </div>
+            <select
+              value={configClientFilter}
+              onChange={e => setConfigClientFilter(e.target.value)}
+              className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+            >
+              <option value="">Todos os clientes</option>
+              {clients?.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+
           {configsLoading ? (
             <div className="flex items-center justify-center h-40">
               <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
@@ -666,13 +753,19 @@ export default function CgnatPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <h3 className="font-semibold text-white">{cfg.name}</h3>
+                      {cfg.client_name && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <User className="w-3 h-3 text-cyan-400" />
+                          <span className="text-xs text-cyan-400">{cfg.client_name}</span>
+                        </div>
+                      )}
                       {cfg.description && (
                         <p className="text-xs text-slate-400 mt-0.5">{cfg.description}</p>
                       )}
                     </div>
                     <div className="flex gap-1 shrink-0">
                       <button
-                        onClick={() => { setMappingModal(cfg); setMappingPage(1); setMappingSearch('') }}
+                        onClick={() => { setMappingModal(cfg); setMappingPage(1); resetMappingFilters() }}
                         title="Ver mapeamento de portas"
                         className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-700 rounded transition-colors"
                       >
@@ -684,6 +777,13 @@ export default function CgnatPage() {
                         className="p-1.5 text-slate-400 hover:text-green-400 hover:bg-slate-700 rounded transition-colors"
                       >
                         <Eye className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => downloadSavedScript(cfg)}
+                        title="Baixar script .rsc"
+                        className="p-1.5 text-slate-400 hover:text-blue-400 hover:bg-slate-700 rounded transition-colors"
+                      >
+                        <Download className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => {
@@ -734,29 +834,58 @@ export default function CgnatPage() {
         </div>
       )}
 
-      {/* ── ABA: CONSULTAR IP ─────────────────────────────────────────────── */}
+      {/* ── ABA: CONSULTAR ───────────────────────────────────────────────── */}
       {activeTab === 'lookup' && (
-        <div className="max-w-2xl space-y-4">
+        <div className="max-w-3xl space-y-4">
           <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
             <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
               <Search className="w-5 h-5 text-cyan-400" />
-              Consultar IP Privado
+              Consultar Mapeamento CGNAT
             </h2>
-            <p className="text-sm text-slate-400 mb-4">
-              Informe um IP privado para descobrir qual IP público e range de portas está mapeado para ele.
+
+            {/* Tipo de consulta */}
+            <div className="flex gap-2 mb-4">
+              {[
+                { id: 'private_ip', label: 'IP Privado', placeholder: 'ex: 100.64.0.15' },
+                { id: 'public_ip', label: 'IP Público', placeholder: 'ex: 170.83.186.130' },
+                { id: 'port', label: 'Porta', placeholder: 'ex: 5432' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => { setLookupType(opt.id as any); setLookupValue(''); setLookupResult(null) }}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    lookupType === opt.id
+                      ? 'bg-cyan-600 text-white'
+                      : 'bg-slate-700 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            <p className="text-sm text-slate-400 mb-3">
+              {lookupType === 'private_ip' && 'Informe um IP privado para descobrir qual IP público e range de portas está mapeado.'}
+              {lookupType === 'public_ip' && 'Informe um IP público para ver todos os IPs privados mapeados a ele.'}
+              {lookupType === 'port' && 'Informe uma porta para descobrir qual IP privado usa essa porta no CGNAT.'}
             </p>
+
             <div className="flex gap-3">
               <input
-                type="text"
-                value={lookupIp}
-                onChange={e => setLookupIp(e.target.value)}
+                type={lookupType === 'port' ? 'number' : 'text'}
+                value={lookupValue}
+                onChange={e => setLookupValue(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleLookup()}
-                placeholder="ex: 100.64.0.15"
+                placeholder={
+                  lookupType === 'private_ip' ? 'ex: 100.64.0.15' :
+                  lookupType === 'public_ip' ? 'ex: 170.83.186.130' :
+                  'ex: 5432'
+                }
                 className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
               />
               <button
                 onClick={handleLookup}
-                disabled={lookupLoading || !lookupIp.trim()}
+                disabled={lookupLoading || !lookupValue.trim()}
                 className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2 px-5 rounded-lg transition-colors disabled:opacity-50"
               >
                 {lookupLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
@@ -771,12 +900,20 @@ export default function CgnatPage() {
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-green-400 font-medium">
                     <CheckCircle className="w-5 h-5" />
-                    IP encontrado em {lookupResult.results.length} configuração(ões)
+                    {lookupResult.results.length} resultado(s) encontrado(s)
                   </div>
                   {lookupResult.results.map((r, i) => (
                     <div key={i} className="bg-slate-900 rounded-lg p-4 space-y-3">
-                      <div className="text-sm font-medium text-white">{r.config_name}</div>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-medium text-white">{r.config_name}</div>
+                        {r.client_name && (
+                          <div className="flex items-center gap-1 text-xs text-cyan-400">
+                            <User className="w-3 h-3" />
+                            {r.client_name}
+                          </div>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
                         <div>
                           <div className="text-slate-400 text-xs">IP Privado</div>
                           <div className="text-cyan-300 font-mono">{r.private_ip}</div>
@@ -811,10 +948,9 @@ export default function CgnatPage() {
                 <div className="flex items-center gap-3 text-slate-400">
                   <AlertTriangle className="w-5 h-5 text-yellow-400" />
                   <div>
-                    <div className="font-medium text-white">IP não encontrado</div>
+                    <div className="font-medium text-white">Nenhum resultado encontrado</div>
                     <div className="text-sm">
-                      O IP <span className="font-mono text-cyan-300">{lookupResult.ip}</span> não está
-                      mapeado em nenhuma configuração CGNAT salva.
+                      Nenhum mapeamento CGNAT encontrado para este valor.
                     </div>
                   </div>
                 </div>
@@ -827,14 +963,21 @@ export default function CgnatPage() {
       {/* ── MODAL: MAPEAMENTO DE PORTAS ───────────────────────────────────── */}
       {mappingModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-4xl max-h-[85vh] flex flex-col">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-5xl max-h-[90vh] flex flex-col">
             {/* Header */}
-            <div className="flex items-center justify-between p-5 border-b border-slate-700">
+            <div className="flex items-center justify-between p-5 border-b border-slate-700 shrink-0">
               <div>
-                <h3 className="text-lg font-semibold text-white">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Table2 className="w-5 h-5 text-cyan-400" />
                   Mapeamento de Portas — {mappingModal.name}
                 </h3>
-                <p className="text-sm text-slate-400 mt-0.5">
+                {mappingModal.client_name && (
+                  <div className="flex items-center gap-1 mt-0.5 text-xs text-cyan-400">
+                    <User className="w-3 h-3" />
+                    {mappingModal.client_name}
+                  </div>
+                )}
+                <p className="text-xs text-slate-400 mt-0.5">
                   {mappingModal.public_prefix} · {mappingModal.clients_per_ip} clientes/IP ·{' '}
                   {mappingModal.ports_per_client?.toLocaleString()} portas/cliente
                 </p>
@@ -847,17 +990,62 @@ export default function CgnatPage() {
               </button>
             </div>
 
-            {/* Busca */}
-            <div className="p-4 border-b border-slate-700">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input
-                  type="text"
-                  value={mappingSearch}
-                  onChange={e => { setMappingSearch(e.target.value); setMappingPage(1) }}
-                  placeholder="Buscar por IP privado, público ou chain..."
-                  className="w-full bg-slate-900 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                />
+            {/* Filtros avançados */}
+            <div className="p-4 border-b border-slate-700 shrink-0">
+              <div className="flex items-center gap-2 mb-3">
+                <Filter className="w-4 h-4 text-slate-400" />
+                <span className="text-sm font-medium text-slate-300">Filtros</span>
+                {hasActiveFilters && (
+                  <button
+                    onClick={resetMappingFilters}
+                    className="ml-auto flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                    Limpar filtros
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">IP Privado</label>
+                  <input
+                    type="text"
+                    value={mappingFilters.private_ip}
+                    onChange={e => { setMappingFilters(f => ({ ...f, private_ip: e.target.value })); setMappingPage(1) }}
+                    placeholder="ex: 100.64.0"
+                    className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white text-xs placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">IP Público</label>
+                  <input
+                    type="text"
+                    value={mappingFilters.public_ip}
+                    onChange={e => { setMappingFilters(f => ({ ...f, public_ip: e.target.value })); setMappingPage(1) }}
+                    placeholder="ex: 170.83.186"
+                    className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white text-xs placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Porta</label>
+                  <input
+                    type="number"
+                    value={mappingFilters.port}
+                    onChange={e => { setMappingFilters(f => ({ ...f, port: e.target.value })); setMappingPage(1) }}
+                    placeholder="ex: 5432"
+                    className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white text-xs placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Chain</label>
+                  <input
+                    type="text"
+                    value={mappingFilters.chain}
+                    onChange={e => { setMappingFilters(f => ({ ...f, chain: e.target.value })); setMappingPage(1) }}
+                    placeholder="ex: CGNAT_5"
+                    className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white text-xs placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 font-mono"
+                  />
+                </div>
               </div>
             </div>
 
@@ -867,32 +1055,35 @@ export default function CgnatPage() {
                 <div className="flex items-center justify-center h-40">
                   <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
                 </div>
+              ) : !mappingData?.items?.length ? (
+                <div className="flex flex-col items-center justify-center h-40 text-slate-500 gap-2">
+                  <Table2 className="w-8 h-8 opacity-30" />
+                  <p className="text-sm">Nenhum resultado encontrado</p>
+                  {hasActiveFilters && (
+                    <button onClick={resetMappingFilters} className="text-xs text-cyan-400 hover:underline">
+                      Limpar filtros
+                    </button>
+                  )}
+                </div>
               ) : (
-                <table className="w-full text-sm">
+                <table className="w-full text-xs">
                   <thead className="bg-slate-900 sticky top-0">
                     <tr>
-                      <th className="px-4 py-3 text-left text-slate-400 font-medium">IP Privado</th>
-                      <th className="px-4 py-3 text-left text-slate-400 font-medium">Sub-rede</th>
-                      <th className="px-4 py-3 text-left text-slate-400 font-medium">IP Público</th>
-                      <th className="px-4 py-3 text-left text-slate-400 font-medium">Portas</th>
-                      <th className="px-4 py-3 text-left text-slate-400 font-medium">Chain</th>
+                      <th className="px-3 py-2.5 text-left text-slate-400 font-medium">IP Privado</th>
+                      <th className="px-3 py-2.5 text-left text-slate-400 font-medium">Sub-rede</th>
+                      <th className="px-3 py-2.5 text-left text-slate-400 font-medium">IP Público</th>
+                      <th className="px-3 py-2.5 text-left text-slate-400 font-medium">Portas</th>
+                      <th className="px-3 py-2.5 text-left text-slate-400 font-medium">Chain</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {mappingData?.items?.map((m: CgnatMappingItem, i: number) => (
-                      <tr
-                        key={m.id || i}
-                        className={`border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors ${
-                          i % 2 === 0 ? '' : 'bg-slate-900/30'
-                        }`}
-                      >
-                        <td className="px-4 py-2 text-cyan-300 font-mono">{m.private_ip}</td>
-                        <td className="px-4 py-2 text-slate-400 font-mono text-xs">{m.private_subnet}</td>
-                        <td className="px-4 py-2 text-green-300 font-mono">{m.public_ip}</td>
-                        <td className="px-4 py-2 text-yellow-300 font-mono">
-                          {m.port_start} – {m.port_end}
-                        </td>
-                        <td className="px-4 py-2 text-slate-400 text-xs">{m.chain_name}</td>
+                    {mappingData.items.map((m: CgnatMappingItem, i: number) => (
+                      <tr key={i} className={`hover:bg-slate-700/30 ${i % 2 === 0 ? 'bg-slate-800' : 'bg-slate-800/50'}`}>
+                        <td className="px-3 py-2 text-cyan-300 font-mono">{m.private_ip}</td>
+                        <td className="px-3 py-2 text-slate-400 font-mono">{m.private_subnet}</td>
+                        <td className="px-3 py-2 text-green-300 font-mono">{m.public_ip}</td>
+                        <td className="px-3 py-2 text-yellow-300 font-mono">{m.port_start}–{m.port_end}</td>
+                        <td className="px-3 py-2 text-slate-400">{m.chain_name}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -902,26 +1093,44 @@ export default function CgnatPage() {
 
             {/* Paginação */}
             {mappingData && mappingData.pages > 1 && (
-              <div className="flex items-center justify-between p-4 border-t border-slate-700">
-                <span className="text-sm text-slate-400">
-                  {mappingData.total.toLocaleString()} registros · Página {mappingData.page} de {mappingData.pages}
+              <div className="flex items-center justify-between px-5 py-3 border-t border-slate-700 shrink-0">
+                <span className="text-xs text-slate-400">
+                  {mappingData.total?.toLocaleString()} registros · Página {mappingPage} de {mappingData.pages}
                 </span>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setMappingPage(p => Math.max(1, p - 1))}
                     disabled={mappingPage <= 1}
-                    className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded disabled:opacity-40 transition-colors"
+                    className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded disabled:opacity-30 transition-colors"
                   >
-                    Anterior
+                    <ChevronLeft className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => setMappingPage(p => Math.min(mappingData.pages, p + 1))}
                     disabled={mappingPage >= mappingData.pages}
-                    className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded disabled:opacity-40 transition-colors"
+                    className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded disabled:opacity-30 transition-colors"
                   >
-                    Próxima
+                    <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Rodapé com total */}
+            {mappingData && (
+              <div className="px-5 py-2 border-t border-slate-700 shrink-0 flex items-center justify-between">
+                <span className="text-xs text-slate-500">
+                  {hasActiveFilters
+                    ? `${mappingData.total?.toLocaleString()} resultado(s) filtrado(s) de ${mappingModal.total_private_ips?.toLocaleString()} total`
+                    : `${mappingData.total?.toLocaleString()} IPs privados mapeados`}
+                </span>
+                <button
+                  onClick={() => downloadSavedScript(mappingModal)}
+                  className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Baixar script .rsc
+                </button>
               </div>
             )}
           </div>
