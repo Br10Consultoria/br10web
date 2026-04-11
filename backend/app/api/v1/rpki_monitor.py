@@ -280,15 +280,26 @@ async def _do_rpki_check(prefix: str, asn: Optional[int] = None) -> Dict[str, An
 
 def _generate_sub_prefixes(parent_prefix: str, target_prefixlen: int) -> List[str]:
     """
-    Gera todos os sub-blocos de comprimento target_prefixlen contidos em parent_prefix.
-    Limita a 256 sub-blocos para evitar explosão combinatória.
+    Gera sub-blocos de comprimento target_prefixlen contidos em parent_prefix.
+    Limita a 32 sub-blocos para evitar explosão combinatória e sobrecarga na API RIPE.
     """
     try:
         net = ipaddress.ip_network(parent_prefix, strict=False)
         if target_prefixlen <= net.prefixlen:
             return []
+        # Calcular quantos sub-blocos seriam gerados
+        diff = target_prefixlen - net.prefixlen
+        total = 2 ** diff
+        if total > 32:
+            # Muitos sub-blocos: retornar vazio para evitar sobrecarga
+            # (ex: /40 → /48 geraria 256 sub-blocos)
+            logger.warning(
+                f"[RPKI] Ignorando expansão {parent_prefix} → /{target_prefixlen}: "
+                f"{total} sub-blocos excede limite de 32"
+            )
+            return []
         subnets = list(net.subnets(new_prefix=target_prefixlen))
-        return [str(s) for s in subnets[:256]]
+        return [str(s) for s in subnets[:32]]
     except Exception:
         return []
 
@@ -308,14 +319,17 @@ async def _do_hierarchical_check(prefix: str, asn: Optional[int] = None) -> Dict
     # Determinar os níveis a verificar baseado no prefixlen
     # IPv4: bloco principal → /23 (se < /23) → /24 (se < /24)
     # IPv6: bloco principal → /33 (se < /33) → /40 (se < /40)
+    # NOTA: Não expandimos para /48 em IPv6 pois um /40 já gera 256 sub-blocos /48,
+    # o que causaria centenas de requisições desnecessárias ao RIPE Stat.
+    # O limite de 32 sub-blocos em _generate_sub_prefixes também protege contra isso.
     if is_ipv6:
         sub_levels = []
         if prefixlen < 33:
-            sub_levels.append(33)
+            sub_levels.append(33)  # ex: /32 → verifica /33 (2 sub-blocos)
         if prefixlen < 40:
-            sub_levels.append(40)
-        if prefixlen < 48:
-            sub_levels.append(48)
+            sub_levels.append(40)  # ex: /32 → verifica /40 (256 sub-blocos, bloqueado pelo limite)
+                                   # ex: /33 → verifica /40 (128 sub-blocos, bloqueado pelo limite)
+                                   # ex: /35 → verifica /40 (32 sub-blocos, permitido)
     else:
         sub_levels = []
         if prefixlen < 23:
