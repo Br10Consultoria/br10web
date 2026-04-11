@@ -4,16 +4,17 @@
  * Dashboard de monitoramento contínuo de prefixos/ASNs via RPKI.
  * - Cadastro de blocos para monitoramento automático (3x/dia)
  * - Status atual com semáforo visual (válido / inválido / não encontrado)
+ * - Verificação manual hierárquica: bloco completo → /23 → /24 (IPv4) ou /33 → /40 (IPv6)
  * - Histórico de verificações por bloco
- * - Verificação manual a qualquer momento
+ * - Descoberta de prefixos IPv6 do ASN para validação manual
  */
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ShieldCheck, ShieldX, ShieldAlert, Shield, Plus, RefreshCw,
   Trash2, Play, Clock, ChevronDown, ChevronUp, X, Loader2,
   CheckCircle, XCircle, HelpCircle, AlertTriangle, Globe, Server,
-  Edit2, Eye, BarChart3, Zap
+  Edit2, BarChart3, Zap, Network, List
 } from 'lucide-react'
 import api from '../utils/api'
 import { useAuthStore } from '../store/authStore'
@@ -26,6 +27,34 @@ interface RoaEntry {
   prefix: string
   max_length?: number
   validity?: string
+}
+
+interface HierarchicalLevel {
+  status: string
+  total: number
+  valid: number
+  invalid: number
+  not_found: number
+  unknown: number
+  error: number
+  prefixes: Array<{ prefix: string; status: string; roas?: RoaEntry[]; error?: string }>
+}
+
+interface HierarchicalResult {
+  prefix: string
+  asn?: number
+  consolidated_status: string
+  main_block: {
+    prefix: string
+    status: string
+    roas: RoaEntry[]
+    origin_asns: number[]
+    country?: string
+    rir?: string
+    sources_checked: string[]
+    errors: string[]
+  }
+  sub_levels: Record<string, HierarchicalLevel>
 }
 
 interface Monitor {
@@ -62,6 +91,7 @@ interface Check {
   trigger_type: string
   duration_ms?: number
   checked_at: string
+  hierarchical?: HierarchicalResult
 }
 
 interface Summary {
@@ -76,6 +106,12 @@ interface Summary {
     never: number
   }
   last_check: string | null
+}
+
+interface Ipv6Prefix {
+  prefix: string
+  prefixlen: number
+  timelines?: any[]
 }
 
 // ─── Configuração visual por status ───────────────────────────────────────────
@@ -154,6 +190,242 @@ function fmtDuration(ms?: number) {
   if (!ms) return ''
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+// ─── Modal de Resultado Hierárquico ──────────────────────────────────────────
+
+function HierarchicalModal({ result, monitorName, onClose }: {
+  result: HierarchicalResult
+  monitorName: string
+  onClose: () => void
+}) {
+  const [expandedLevel, setExpandedLevel] = useState<string | null>(null)
+
+  const mainCfg = getStatus(result.main_block.status)
+  const MainIcon = mainCfg.icon
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-dark-800 border border-dark-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700 flex-shrink-0">
+          <div>
+            <h2 className="text-base font-semibold text-white flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-brand-400" />
+              Validação Hierárquica — {monitorName}
+            </h2>
+            <p className="text-xs text-dark-500 font-mono mt-0.5">
+              {result.prefix}{result.asn ? ` · AS${result.asn}` : ''}
+              {' · '}
+              <span className={getStatus(result.consolidated_status).color}>
+                Status consolidado: {getStatus(result.consolidated_status).label}
+              </span>
+            </p>
+          </div>
+          <button onClick={onClose} className="btn-ghost p-2 rounded-lg">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {/* Bloco principal */}
+          <div>
+            <h3 className="text-xs font-medium text-dark-400 uppercase tracking-wide mb-2">
+              Bloco Principal
+            </h3>
+            <div className={`p-3 rounded-xl border ${mainCfg.border} ${mainCfg.bg}`}>
+              <div className="flex items-center gap-2">
+                <MainIcon className={`w-4 h-4 ${mainCfg.color}`} />
+                <span className="font-mono text-sm text-white">{result.main_block.prefix}</span>
+                <span className={`text-xs font-semibold ${mainCfg.color}`}>{mainCfg.label}</span>
+                {result.main_block.country && (
+                  <span className="text-xs text-dark-500 flex items-center gap-1">
+                    <Globe className="w-3 h-3" />{result.main_block.country}
+                  </span>
+                )}
+                {result.main_block.rir && (
+                  <span className="text-xs text-dark-500">{result.main_block.rir}</span>
+                )}
+              </div>
+              {result.main_block.roas.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {result.main_block.roas.map((roa, i) => (
+                    <div key={i} className="flex items-center gap-3 text-xs font-mono text-dark-400">
+                      <span className="text-brand-400">AS{roa.asn}</span>
+                      <span>{roa.prefix}</span>
+                      {roa.max_length && <span className="text-dark-600">max/{roa.max_length}</span>}
+                      {roa.validity && <span className={getStatus(roa.validity).color}>{getStatus(roa.validity).label}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {result.main_block.errors.length > 0 && (
+                <p className="text-xs text-orange-400 mt-1">{result.main_block.errors.join('; ')}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Sub-níveis */}
+          {Object.entries(result.sub_levels).map(([level, data]) => {
+            const levelCfg = getStatus(data.status)
+            const LevelIcon = levelCfg.icon
+            const isExpanded = expandedLevel === level
+
+            return (
+              <div key={level}>
+                <h3 className="text-xs font-medium text-dark-400 uppercase tracking-wide mb-2">
+                  Sub-blocos {level}
+                </h3>
+                <div className={`rounded-xl border ${levelCfg.border} overflow-hidden`}>
+                  {/* Resumo do nível */}
+                  <button
+                    onClick={() => setExpandedLevel(isExpanded ? null : level)}
+                    className={`w-full flex items-center justify-between p-3 ${levelCfg.bg} hover:opacity-90 transition-opacity`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <LevelIcon className={`w-4 h-4 ${levelCfg.color}`} />
+                      <span className={`text-xs font-semibold ${levelCfg.color}`}>
+                        Status consolidado: {levelCfg.label}
+                      </span>
+                      <span className="text-xs text-dark-400">{data.total} prefixos</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs">
+                      {data.valid > 0 && <span className="text-emerald-400">{data.valid} válidos</span>}
+                      {data.invalid > 0 && <span className="text-red-400">{data.invalid} inválidos</span>}
+                      {data.not_found > 0 && <span className="text-yellow-400">{data.not_found} sem ROA</span>}
+                      {data.error > 0 && <span className="text-orange-400">{data.error} erros</span>}
+                      {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-dark-400" /> : <ChevronDown className="w-3.5 h-3.5 text-dark-400" />}
+                    </div>
+                  </button>
+
+                  {/* Lista de prefixos expandida */}
+                  {isExpanded && (
+                    <div className="bg-dark-900/50 max-h-64 overflow-y-auto">
+                      {data.prefixes.map((p, i) => {
+                        const pCfg = getStatus(p.status)
+                        const PIcon = pCfg.icon
+                        return (
+                          <div key={i} className="flex items-center gap-3 px-3 py-1.5 border-b border-dark-800 last:border-0">
+                            <PIcon className={`w-3 h-3 flex-shrink-0 ${pCfg.color}`} />
+                            <span className="font-mono text-xs text-dark-300 flex-1">{p.prefix}</span>
+                            <span className={`text-xs ${pCfg.color}`}>{pCfg.label}</span>
+                            {p.error && <span className="text-xs text-orange-400 truncate max-w-[200px]">{p.error}</span>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+
+          {Object.keys(result.sub_levels).length === 0 && (
+            <p className="text-xs text-dark-500 text-center py-4">
+              Bloco /{result.prefix.split('/')[1]} não possui sub-blocos para validação hierárquica.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal de Prefixos IPv6 ───────────────────────────────────────────────────
+
+function Ipv6PrefixesModal({ monitor, onClose }: { monitor: Monitor; onClose: () => void }) {
+  const { accessToken } = useAuthStore()
+  const token = accessToken || localStorage.getItem('access_token')
+  const authHeader = token ? { Authorization: `Bearer ${token}` } : {}
+  const qc = useQueryClient()
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['rpki-ipv6', monitor.id],
+    queryFn: () => api.get(`/rpki-monitor/monitors/${monitor.id}/ipv6-prefixes`, { headers: authHeader }).then(r => r.data),
+  })
+
+  const prefixes: Ipv6Prefix[] = data?.ipv6_prefixes ?? []
+
+  const createMut = useMutation({
+    mutationFn: (prefix: string) => api.post('/rpki-monitor/monitors', {
+      name: `IPv6 ${prefix} (AS${monitor.asn})`,
+      asn: monitor.asn,
+      prefix,
+      active: true,
+      alert_on_invalid: true,
+      alert_on_not_found: false,
+    }, { headers: authHeader }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rpki-monitors'] })
+      qc.invalidateQueries({ queryKey: ['rpki-summary'] })
+      toast.success('Monitor IPv6 criado!')
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.detail || 'Erro ao criar monitor'),
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-dark-800 border border-dark-700 rounded-2xl w-full max-w-2xl shadow-2xl max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700 flex-shrink-0">
+          <div>
+            <h2 className="text-base font-semibold text-white flex items-center gap-2">
+              <Network className="w-4 h-4 text-sky-400" />
+              Prefixos IPv6 — AS{monitor.asn}
+            </h2>
+            <p className="text-xs text-dark-500 mt-0.5">
+              Prefixos IPv6 anunciados pelo ASN via RIPE Stat. Clique em "+" para criar um monitor.
+            </p>
+          </div>
+          <button onClick={onClose} className="btn-ghost p-2 rounded-lg">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin text-brand-400" />
+            </div>
+          ) : error ? (
+            <div className="text-center py-12 text-red-400 text-sm">
+              {(error as any)?.response?.data?.detail || 'Erro ao buscar prefixos IPv6'}
+            </div>
+          ) : prefixes.length === 0 ? (
+            <div className="text-center py-12 text-dark-500">
+              <Network className="w-8 h-8 mx-auto mb-2 opacity-40" />
+              <p>Nenhum prefixo IPv6 encontrado para AS{monitor.asn}</p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <p className="text-xs text-dark-500 mb-3">{prefixes.length} prefixo(s) IPv6 encontrado(s)</p>
+              {prefixes.map((p, i) => (
+                <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg bg-dark-900/50 border border-dark-700 hover:border-dark-600 transition-colors">
+                  <Network className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
+                  <span className="font-mono text-sm text-white flex-1">{p.prefix}</span>
+                  <span className="text-xs text-dark-500">/{p.prefixlen}</span>
+                  <button
+                    onClick={() => createMut.mutate(p.prefix)}
+                    disabled={createMut.isPending}
+                    className="btn-ghost p-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 text-xs flex items-center gap-1"
+                    title="Criar monitor para este prefixo"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Monitor
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {data?.errors?.length > 0 && (
+            <div className="mt-3 p-3 bg-orange-500/10 border border-orange-500/20 rounded-lg">
+              <p className="text-xs text-orange-400">{data.errors.join('; ')}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ─── Modal de Cadastro/Edição ─────────────────────────────────────────────────
@@ -249,7 +521,7 @@ function MonitorForm({ initial, onClose, onSaved }: MonitorFormProps) {
               <input
                 value={form.prefix}
                 onChange={e => setForm(f => ({ ...f, prefix: e.target.value }))}
-                placeholder="177.75.0.0/20"
+                placeholder="177.75.0.0/20 ou 2001:db8::/32"
                 className="input w-full font-mono"
               />
             </div>
@@ -367,6 +639,8 @@ function HistoryModal({ monitor, onClose }: { monitor: Monitor; onClose: () => v
               {history.map(c => {
                 const cfg = getStatus(c.status)
                 const Icon = cfg.icon
+                // Verificar se tem dados hierárquicos
+                const hasHierarchical = c.hierarchical != null
                 return (
                   <div key={c.id} className={`flex items-start gap-3 p-3 rounded-xl border ${cfg.border} ${cfg.bg}`}>
                     <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${cfg.color}`} />
@@ -377,6 +651,11 @@ function HistoryModal({ monitor, onClose }: { monitor: Monitor; onClose: () => v
                         <span className={`text-xs px-1.5 py-0.5 rounded ${c.trigger_type === 'manual' ? 'bg-brand-600/20 text-brand-400' : 'bg-dark-700 text-dark-400'}`}>
                           {c.trigger_type === 'manual' ? 'Manual' : 'Automático'}
                         </span>
+                        {hasHierarchical && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-sky-600/20 text-sky-400">
+                            Hierárquico
+                          </span>
+                        )}
                         {c.duration_ms && <span className="text-xs text-dark-600">{fmtDuration(c.duration_ms)}</span>}
                       </div>
                       <p className="text-xs text-dark-500 mt-0.5">{fmtDate(c.checked_at)}</p>
@@ -406,13 +685,19 @@ interface MonitorCardProps {
   onDelete: () => void
   onCheck: () => void
   onHistory: () => void
+  onIpv6: () => void
   checking: boolean
+  lastCheckResult?: { monitor: Monitor; check: Check } | null
 }
 
-function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, checking }: MonitorCardProps) {
+function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, onIpv6, checking, lastCheckResult }: MonitorCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const [showHierarchical, setShowHierarchical] = useState(false)
   const cfg = getStatus(monitor.last_status)
   const Icon = cfg.icon
+
+  // Verificar se o último check tem dados hierárquicos
+  const hierarchicalResult = lastCheckResult?.check?.hierarchical
 
   return (
     <div className={`bg-dark-800 border rounded-xl overflow-hidden transition-all ${cfg.border}`}>
@@ -462,6 +747,26 @@ function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, checking }
           </div>
 
           <div className="flex items-center gap-1">
+            {/* Botão de resultado hierárquico (aparece após verificação manual) */}
+            {hierarchicalResult && (
+              <button
+                onClick={() => setShowHierarchical(true)}
+                className="btn-ghost p-1.5 rounded-lg text-sky-400 hover:text-sky-300"
+                title="Ver resultado hierárquico"
+              >
+                <List className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {/* Botão IPv6 (só aparece se tem ASN) */}
+            {monitor.asn && (
+              <button
+                onClick={onIpv6}
+                className="btn-ghost p-1.5 rounded-lg text-sky-400 hover:text-sky-300"
+                title="Descobrir prefixos IPv6 do ASN"
+              >
+                <Network className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               onClick={onHistory}
               className="btn-ghost p-1.5 rounded-lg"
@@ -480,7 +785,7 @@ function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, checking }
               onClick={onCheck}
               disabled={checking}
               className="btn-ghost p-1.5 rounded-lg text-brand-400 hover:text-brand-300"
-              title="Verificar agora"
+              title="Verificar agora (hierárquico)"
             >
               {checking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
             </button>
@@ -507,16 +812,18 @@ function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, checking }
         <div className="border-t border-dark-700 px-4 py-3 bg-dark-900/50">
           <p className="text-xs font-medium text-dark-400 mb-2">ROAs encontrados</p>
           <div className="space-y-1">
-            {monitor.last_roas.map((roa, i) => (
-              <div key={i} className="flex items-center gap-3 text-xs font-mono">
-                <span className="text-brand-400">AS{roa.asn}</span>
-                <span className="text-dark-300">{roa.prefix}</span>
-                {roa.max_length && <span className="text-dark-500">max/{roa.max_length}</span>}
-                {roa.validity && (
-                  <span className={getStatus(roa.validity).color}>{getStatus(roa.validity).label}</span>
-                )}
-              </div>
-            ))}
+            {monitor.last_roas
+              .filter((roa: any) => !roa._hierarchical) // Ignorar marcador interno
+              .map((roa, i) => (
+                <div key={i} className="flex items-center gap-3 text-xs font-mono">
+                  <span className="text-brand-400">AS{roa.asn}</span>
+                  <span className="text-dark-300">{roa.prefix}</span>
+                  {roa.max_length && <span className="text-dark-500">max/{roa.max_length}</span>}
+                  {roa.validity && (
+                    <span className={getStatus(roa.validity).color}>{getStatus(roa.validity).label}</span>
+                  )}
+                </div>
+              ))}
           </div>
         </div>
       )}
@@ -524,6 +831,15 @@ function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, checking }
         <div className="border-t border-dark-700 px-4 py-3 bg-dark-900/50">
           <p className="text-xs text-orange-400">{monitor.last_error}</p>
         </div>
+      )}
+
+      {/* Modal de resultado hierárquico */}
+      {showHierarchical && hierarchicalResult && (
+        <HierarchicalModal
+          result={hierarchicalResult}
+          monitorName={monitor.name}
+          onClose={() => setShowHierarchical(false)}
+        />
       )}
     </div>
   )
@@ -540,9 +856,12 @@ export default function RpkiMonitorPage() {
   const [showForm, setShowForm] = useState(false)
   const [editMonitor, setEditMonitor] = useState<Monitor | null>(null)
   const [historyMonitor, setHistoryMonitor] = useState<Monitor | null>(null)
+  const [ipv6Monitor, setIpv6Monitor] = useState<Monitor | null>(null)
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set())
   const [checkingAll, setCheckingAll] = useState(false)
   const [filterStatus, setFilterStatus] = useState<string>('all')
+  // Armazena o último resultado hierárquico por monitor_id
+  const [lastCheckResults, setLastCheckResults] = useState<Record<string, { monitor: Monitor; check: Check }>>({})
 
   // Queries
   const { data: summary, isLoading: summaryLoading } = useQuery<Summary>({
@@ -568,16 +887,24 @@ export default function RpkiMonitorPage() {
     onError: () => toast.error('Erro ao remover monitor'),
   })
 
-  // Verificar um monitor
+  // Verificar um monitor (hierárquico)
   const handleCheck = useCallback(async (monitor: Monitor) => {
     setCheckingIds(s => new Set(s).add(monitor.id))
     try {
-      await api.post(`/rpki-monitor/monitors/${monitor.id}/check`, {}, { headers: authHeader })
-      toast.success(`${monitor.name} verificado!`)
+      const res = await api.post(`/rpki-monitor/monitors/${monitor.id}/check`, {}, { headers: authHeader })
+      const data = res.data as { monitor: Monitor; check: Check }
+
+      // Armazenar resultado hierárquico
+      if (data.check?.hierarchical) {
+        setLastCheckResults(prev => ({ ...prev, [monitor.id]: data }))
+      }
+
+      const statusLabel = getStatus(data.check?.status || null).label
+      toast.success(`${monitor.name}: ${statusLabel}`)
       qc.invalidateQueries({ queryKey: ['rpki-monitors'] })
       qc.invalidateQueries({ queryKey: ['rpki-summary'] })
-    } catch {
-      toast.error('Erro ao verificar monitor')
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || 'Erro ao verificar monitor')
     } finally {
       setCheckingIds(s => { const n = new Set(s); n.delete(monitor.id); return n })
     }
@@ -721,7 +1048,9 @@ export default function RpkiMonitorPage() {
               }}
               onCheck={() => handleCheck(m)}
               onHistory={() => setHistoryMonitor(m)}
+              onIpv6={() => setIpv6Monitor(m)}
               checking={checkingIds.has(m.id)}
+              lastCheckResult={lastCheckResults[m.id] ?? null}
             />
           ))}
         </div>
@@ -739,6 +1068,12 @@ export default function RpkiMonitorPage() {
         <HistoryModal
           monitor={historyMonitor}
           onClose={() => setHistoryMonitor(null)}
+        />
+      )}
+      {ipv6Monitor && (
+        <Ipv6PrefixesModal
+          monitor={ipv6Monitor}
+          onClose={() => setIpv6Monitor(null)}
         />
       )}
     </div>
