@@ -1,35 +1,19 @@
 """
 BR10 NetManager - Audit Log Model
 
-SOLUÇÃO DEFINITIVA PARA O ENUM auditaction:
+A coluna `action` usa VARCHAR(100) — não ENUM nativo do PostgreSQL.
 
-O banco PostgreSQL tem registros antigos com valores em MAIÚSCULO (LOGIN, LOGOUT)
-e novos em minúsculo (login, logout). Existem dois erros que precisam ser evitados:
+Motivo: logs de auditoria são extensíveis por natureza. Novos tipos de ação
+surgem com o tempo, e ENUM nativo do PostgreSQL exige ALTER TYPE a cada adição
+(operação fora de transação). VARCHAR com validação na aplicação é o padrão
+da indústria para sistemas de auditoria (Django Audit Log, AWS CloudTrail, etc.).
 
-1. DatatypeMismatchError na ESCRITA:
-   - Ocorre quando o SQLAlchemy usa impl=String e gera $N::VARCHAR
-   - O PostgreSQL rejeita VARCHAR → auditaction sem cast explícito
-   - Solução: usar literal_column com cast explícito no process_bind_param
-
-2. LookupError na LEITURA:
-   - Ocorre quando postgresql.ENUM tenta mapear 'LOGIN' (legado) para o enum Python
-   - O enum Python só conhece 'login' (minúsculo)
-   - Solução: usar TypeDecorator com process_result_value retornando string bruta
-
-A abordagem correta é:
-- TypeDecorator com impl=Text (sem anotação de tipo PostgreSQL)
-- process_bind_param: extrai .value e retorna string pura (sem ::VARCHAR)
-- process_result_value: retorna string bruta sem tentar mapear para enum Python
-- Na coluna, usar type_=AuditActionType com postgresql_using='auditaction'
-  via Column(..., type_=...) para que o DDL use o tipo correto
-
-NOTA: A chave é que impl=Text faz o bind sem sufixo de tipo, e o PostgreSQL
-aceita cast implícito de texto para ENUM quando o valor existe no ENUM.
+Validação de integridade: garantida pelo enum Python AuditAction — apenas
+valores definidos ali são aceitos pelo código da aplicação.
 """
 from sqlalchemy import Column, String, Text, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from sqlalchemy import TypeDecorator
 import enum
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -107,48 +91,6 @@ class AuditAction(str, enum.Enum):
     IMPORT_DATA = "import_data"
 
 
-class AuditActionType(TypeDecorator):
-    """
-    TypeDecorator para a coluna action do AuditLog.
-
-    Resolve dois problemas simultâneos:
-
-    ESCRITA (process_bind_param):
-      - Extrai o .value do AuditAction enum (ex: 'login')
-      - Retorna string pura — o asyncpg/psycopg2 enviará sem ::VARCHAR
-      - O PostgreSQL aceita cast implícito de texto para auditaction
-        quando o valor existe no ENUM nativo
-
-    LEITURA (process_result_value):
-      - Retorna a string bruta do banco sem tentar mapear para enum Python
-      - Aceita tanto 'LOGIN' (legado/maiúsculo) quanto 'login' (novo/minúsculo)
-      - Evita LookupError em registros antigos
-
-    IMPORTANTE: impl=Text (não String) — o Text não adiciona anotação de
-    tipo no bind parameter, evitando o sufixo ::VARCHAR que causa
-    DatatypeMismatchError.
-    """
-    impl = Text
-    cache_ok = True
-
-    def process_bind_param(self, value, dialect):
-        """Converte AuditAction enum para string ao escrever no banco."""
-        if value is None:
-            return None
-        if isinstance(value, AuditAction):
-            return value.value
-        if isinstance(value, str):
-            return value
-        return str(value)
-
-    def process_result_value(self, value, dialect):
-        """
-        Retorna a string bruta do banco sem tentar mapear para o enum Python.
-        Aceita 'LOGIN' (legado) e 'login' (novo) sem LookupError.
-        """
-        return value
-
-
 class AuditLog(Base, UUIDMixin, TimestampMixin):
     """Log de auditoria de todas as ações do sistema."""
     __tablename__ = "audit_logs"
@@ -156,10 +98,9 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
 
-    # AuditActionType:
-    # - Lê como string bruta (aceita LOGIN e login — sem LookupError)
-    # - Escreve como string pura sem ::VARCHAR (sem DatatypeMismatchError)
-    action = Column(AuditActionType, nullable=False, index=True)
+    # VARCHAR(100) — sem ENUM nativo. Simples, extensível, sem problemas de cast.
+    # Validação garantida pelo enum Python AuditAction na camada de aplicação.
+    action = Column(String(100), nullable=False, index=True)
 
     resource_type = Column(String(100), nullable=True)
     resource_id = Column(String(255), nullable=True)

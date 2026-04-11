@@ -1,18 +1,20 @@
 """
 BR10 NetManager - API de Log de Auditoria
 Fornece acesso completo aos logs de auditoria com filtros avançados.
+
+A coluna action é VARCHAR(100) — filtros usam comparação direta de string,
+sem cast() ou workarounds de tipo.
 """
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, cast, String as SAString
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import joinedload
 import logging
 
 from app.core.database import get_db
 from app.models.audit import AuditLog, AuditAction
 from app.models.user import User
-from app.models.device import Device
 from app.api.v1.auth import require_admin
 
 router = APIRouter(prefix="/audit", tags=["Audit"])
@@ -46,7 +48,7 @@ async def list_audit_logs(
     )
     count_query = select(func.count(AuditLog.id))
 
-    # Filtro de busca textual (descrição, IP, resource_id, username via join)
+    # Filtro de busca textual (descrição, IP, resource_id)
     if search:
         search_filter = or_(
             AuditLog.description.ilike(f"%{search}%"),
@@ -58,13 +60,12 @@ async def list_audit_logs(
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
 
-    # Filtro por ação — usa cast(action, String) para comparar ENUM com VARCHAR
-    # Busca case-insensitive: aceita 'login' e 'LOGIN' (registros antigos)
+    # Filtro por ação — VARCHAR direto, sem cast
+    # Busca case-insensitive para compatibilidade com registros legados (LOGIN/login)
     if action:
-        action_col_as_str = cast(AuditLog.action, SAString)
         action_filter = or_(
-            action_col_as_str == action.lower(),
-            action_col_as_str == action.upper(),
+            AuditLog.action == action.lower(),
+            AuditLog.action == action.upper(),
         )
         query = query.where(action_filter)
         count_query = count_query.where(action_filter)
@@ -106,7 +107,7 @@ async def list_audit_logs(
                 "device_id": str(log.device_id) if log.device_id else None,
                 "device_name": log.device.name if log.device else None,
                 "device_ip": log.device.management_ip if log.device else None,
-                "action": str(log.action.value) if hasattr(log.action, "value") else str(log.action),
+                "action": str(log.action),
                 "resource_type": log.resource_type,
                 "resource_id": log.resource_id,
                 "description": log.description,
@@ -147,7 +148,6 @@ async def audit_summary(
     - Total de falhas
     - Últimos erros críticos
     """
-    from sqlalchemy import text
     from datetime import datetime, timedelta, timezone
 
     since = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -169,7 +169,7 @@ async def audit_summary(
         .limit(10)
     )
     by_action = [
-        {"action": row[0].value if hasattr(row[0], "value") else str(row[0]), "count": row[1]}
+        {"action": str(row[0]), "count": row[1]}
         for row in action_counts.all()
     ]
 
@@ -190,7 +190,7 @@ async def audit_summary(
         "recent_failures": [
             {
                 "id": str(log.id),
-                "action": str(log.action.value) if hasattr(log.action, "value") else str(log.action),
+                "action": str(log.action),
                 "description": log.description,
                 "error_message": log.error_message,
                 "username": log.user.username if log.user else None,

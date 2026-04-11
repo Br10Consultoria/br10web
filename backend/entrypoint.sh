@@ -56,76 +56,32 @@ async def init_database():
         engine = create_async_engine(db_url, echo=False)
 
         async with engine.begin() as conn:
-            # Criar ENUMs manualmente com IF NOT EXISTS para evitar duplicatas
+            # Criar ENUMs necessários (idempotente via IF NOT EXISTS / EXCEPTION)
             enums_sql = [
+                # Autenticação e usuários
                 "DO $$ BEGIN CREATE TYPE userrole AS ENUM ('ADMIN', 'TECHNICIAN', 'VIEWER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                # VPN
                 "DO $$ BEGIN CREATE TYPE vpntype AS ENUM ('L2TP', 'PPTP', 'OPENVPN', 'IPSEC', 'WIREGUARD', 'GRE', 'OTHER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE vpnstatus AS ENUM ('ACTIVE', 'INACTIVE', 'CONNECTING', 'ERROR', 'DISABLED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
-                # Criar o ENUM auditaction com todos os valores (novos em minúsculo)
-                "DO $$ BEGIN CREATE TYPE auditaction AS ENUM ('LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'DEVICE_CREATE', 'DEVICE_UPDATE', 'DEVICE_DELETE', 'DEVICE_VIEW', 'CREDENTIAL_CREATE', 'CREDENTIAL_UPDATE', 'CREDENTIAL_DELETE', 'VPN_CREATE', 'VPN_UPDATE', 'VPN_DELETE', 'ROUTE_CREATE', 'ROUTE_UPDATE', 'ROUTE_DELETE', 'BACKUP_CREATE', 'BACKUP_RESTORE', 'USER_CREATE', 'USER_UPDATE', 'USER_DELETE', 'TERMINAL_CONNECT', 'TERMINAL_DISCONNECT', 'SETTINGS_UPDATE', '2FA_ENABLE', '2FA_DISABLE'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
-                # Adicionar valores novos ao ENUM existente (idempotente via IF NOT EXISTS)
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'login'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'logout'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'login_failed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'password_changed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS '2fa_enabled'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS '2fa_disabled'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'device_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'device_updated'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'device_deleted'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'device_connected'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'device_disconnected'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'device_connection_failed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'terminal_session_started'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'terminal_session_ended'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'terminal_command'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'terminal_connection_failed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'command_executed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'command_failed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'vpn_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'vpn_updated'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'vpn_deleted'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'vpn_connected'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'vpn_disconnected'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'vpn_connection_failed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'route_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'route_updated'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'route_deleted'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_restored'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'user_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'user_updated'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'user_deleted'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'export_data'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'import_data'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'playbook_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'playbook_updated'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'playbook_deleted'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'playbook_executed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_schedule_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_schedule_updated'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_schedule_deleted'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_schedule_executed'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'rpki_monitor_created'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'rpki_monitor_updated'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'rpki_monitor_deleted'; END $$;",
-                "DO $$ BEGIN ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'rpki_monitor_checked'; END $$;",
+                # Automação / Playbooks
                 "DO $$ BEGIN CREATE TYPE commandcategory AS ENUM ('diagnostics', 'configuration', 'backup', 'monitoring', 'routing', 'optical', 'security', 'other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE executionstatus AS ENUM ('pending', 'running', 'success', 'error', 'timeout'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE playbookstatus AS ENUM ('draft', 'active', 'disabled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE playbooksteptype AS ENUM ('telnet_connect', 'ssh_connect', 'disconnect', 'send_command', 'wait_for', 'send_string', 'ftp_download', 'ftp_upload', 'sleep', 'log'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE playbookrunstatus AS ENUM ('pending', 'running', 'success', 'error', 'timeout', 'cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                # IA
                 "DO $$ BEGIN CREATE TYPE aiprovider AS ENUM ('openai', 'gemini', 'anthropic'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE aianalysisstatus AS ENUM ('pending', 'running', 'success', 'error'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
+                # Backup de Dispositivos
                 "DO $$ BEGIN CREATE TYPE backupschedulestatus AS ENUM ('active', 'paused', 'disabled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
                 "DO $$ BEGIN CREATE TYPE backuprunstatus AS ENUM ('pending', 'running', 'success', 'partial', 'failure', 'cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
-                # ENUMs do Monitor RPKI
+                # Monitor RPKI
                 "DO $$ BEGIN CREATE TYPE rpkistatus AS ENUM ('valid', 'invalid', 'not-found', 'unknown', 'error'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
             ]
             for sql in enums_sql:
                 await conn.execute(text(sql))
 
-            # Criar tabelas (checkfirst=True nao recria se ja existem)
+            # Criar tabelas (checkfirst=True não recria se já existem)
             await conn.run_sync(Base.metadata.create_all, checkfirst=True)
 
         await engine.dispose()
