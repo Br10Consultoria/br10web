@@ -5,13 +5,18 @@ SOLUÇÃO PARA O ENUM auditaction:
 O banco PostgreSQL tem registros antigos com valores em MAIÚSCULO (LOGIN, LOGOUT)
 e novos em minúsculo (login, logout). Para compatibilidade total:
 
-- Leitura: AuditActionType.process_result_value() retorna a string bruta do banco
-  sem tentar mapear para o enum Python — aceita qualquer valor.
-- Escrita: AuditActionType.process_bind_param() envia o .value do AuditAction
-  com cast explícito via literal_column para o tipo auditaction do PostgreSQL.
+- A coluna `action` usa postgresql.ENUM com create_type=False para referenciar
+  o ENUM nativo do banco sem tentar recriá-lo.
+- O ENUM nativo aceita tanto valores MAIÚSCULO (legados) quanto minúsculo (novos).
+- Na LEITURA: o valor é retornado como string bruta (sem mapeamento para enum Python).
+- Na ESCRITA: o SQLAlchemy envia o valor sem o sufixo ::VARCHAR, permitindo que o
+  PostgreSQL aceite o cast implícito da string para o tipo auditaction.
+
+IMPORTANTE: Nunca usar TypeDecorator com impl=String para colunas ENUM nativas do
+PostgreSQL — isso gera $N::VARCHAR que o PostgreSQL rejeita com DatatypeMismatchError.
 """
-from sqlalchemy import Column, String, Text, ForeignKey, JSON, TypeDecorator
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, Text, ForeignKey, JSON
+from sqlalchemy.dialects.postgresql import UUID, ENUM as PgEnum
 from sqlalchemy.orm import relationship
 import enum
 
@@ -90,28 +95,16 @@ class AuditAction(str, enum.Enum):
     IMPORT_DATA = "import_data"
 
 
-class AuditActionType(TypeDecorator):
-    """
-    TypeDecorator para a coluna action do AuditLog.
-
-    - Na LEITURA: retorna a string bruta do banco (aceita LOGIN e login).
-    - Na ESCRITA: extrai o .value do AuditAction enum e envia como string
-      que o PostgreSQL aceita via cast implícito VARCHAR::auditaction.
-    """
-    impl = String(100)
-    cache_ok = True
-
-    def process_bind_param(self, value, dialect):
-        """Converte AuditAction enum para string ao escrever no banco."""
-        if value is None:
-            return None
-        if isinstance(value, AuditAction):
-            return value.value
-        return str(value)
-
-    def process_result_value(self, value, dialect):
-        """Retorna a string bruta do banco sem tentar mapear para o enum."""
-        return value
+# Tipo ENUM nativo do PostgreSQL referenciando o tipo auditaction já existente no banco.
+# create_type=False: não tenta criar/dropar o ENUM — usa o que já existe.
+# values_callable: extrai os .value do AuditAction enum para o bind correto.
+# Ao escrever, o SQLAlchemy envia a string sem ::VARCHAR, permitindo cast implícito.
+# Ao ler, retorna a string bruta (compatível com valores MAIÚSCULO legados).
+AuditActionPgEnum = PgEnum(
+    *[a.value for a in AuditAction],
+    name="auditaction",
+    create_type=False,  # O ENUM já existe no banco — não recriar
+)
 
 
 class AuditLog(Base, UUIDMixin, TimestampMixin):
@@ -121,10 +114,8 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
 
-    # AuditActionType: lê como string (compatível com MAIÚSCULO e minúsculo),
-    # escreve o .value do enum. O PostgreSQL aceita o cast VARCHAR::auditaction
-    # automaticamente para os valores que existem no ENUM do banco.
-    action = Column(AuditActionType, nullable=False, index=True)
+    # Usa o ENUM nativo do PostgreSQL — evita DatatypeMismatchError com ::VARCHAR
+    action = Column(AuditActionPgEnum, nullable=False, index=True)
 
     resource_type = Column(String(100), nullable=True)
     resource_id = Column(String(255), nullable=True)
