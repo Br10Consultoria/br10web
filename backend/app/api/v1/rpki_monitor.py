@@ -383,7 +383,7 @@ async def create_monitor(
     await db.commit()
     await db.refresh(monitor)
 
-    # Auditoria
+    # Auditoria (não-bloqueante)
     try:
         audit = AuditLog(
             user_id=current_user.id,
@@ -395,8 +395,10 @@ async def create_monitor(
         )
         db.add(audit)
         await db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[RPKI] Falha ao registrar auditoria (create): {e}")
+        await db.rollback()
+        await db.refresh(monitor)
 
     return _monitor_to_dict(monitor)
 
@@ -437,7 +439,7 @@ async def update_monitor(
     await db.commit()
     await db.refresh(monitor)
 
-    # Auditoria
+    # Auditoria (não-bloqueante)
     try:
         audit = AuditLog(
             user_id=current_user.id,
@@ -449,8 +451,10 @@ async def update_monitor(
         )
         db.add(audit)
         await db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[RPKI] Falha ao registrar auditoria (update): {e}")
+        await db.rollback()
+        await db.refresh(monitor)
 
     return _monitor_to_dict(monitor)
 
@@ -471,7 +475,7 @@ async def delete_monitor(
     await db.delete(monitor)
     await db.commit()
 
-    # Auditoria
+    # Auditoria (não-bloqueante)
     try:
         audit = AuditLog(
             user_id=current_user.id,
@@ -483,8 +487,9 @@ async def delete_monitor(
         )
         db.add(audit)
         await db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[RPKI] Falha ao registrar auditoria (delete): {e}")
+        await db.rollback()
 
     return {"message": f"Monitor '{monitor_name}' removido com sucesso"}
 
@@ -503,7 +508,7 @@ async def check_monitor_now(
 
     check = await _check_monitor(monitor, db, trigger_type="manual", triggered_by=current_user.id)
 
-    # Auditoria
+    # Auditoria (não-bloqueante)
     try:
         status_label = check.status or "unknown"
         audit = AuditLog(
@@ -516,8 +521,10 @@ async def check_monitor_now(
         )
         db.add(audit)
         await db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[RPKI] Falha ao registrar auditoria (check): {e}")
+        await db.rollback()
+        await db.refresh(monitor)
 
     return {
         "monitor": _monitor_to_dict(monitor),

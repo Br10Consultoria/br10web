@@ -83,7 +83,11 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
 
-    action = Column(Enum(AuditAction), nullable=False, index=True)
+    action = Column(
+        Enum(AuditAction, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        index=True
+    )
     resource_type = Column(String(100), nullable=True)
     resource_id = Column(String(255), nullable=True)
 
