@@ -1,14 +1,17 @@
 """
 BR10 NetManager - Audit Log Model
-Registro completo de auditoria de todas as ações do sistema.
 
-NOTA SOBRE O ENUM auditaction:
-O banco PostgreSQL tem a coluna 'action' como tipo ENUM nativo (auditaction).
-Registros antigos têm valores em MAIÚSCULO (LOGIN, LOGOUT) e novos em minúsculo.
-Usamos type_coerce + cast para garantir compatibilidade na escrita e leitura.
+SOLUÇÃO PARA O ENUM auditaction:
+O banco PostgreSQL tem registros antigos com valores em MAIÚSCULO (LOGIN, LOGOUT)
+e novos em minúsculo (login, logout). Para compatibilidade total:
+
+- Leitura: AuditActionType.process_result_value() retorna a string bruta do banco
+  sem tentar mapear para o enum Python — aceita qualquer valor.
+- Escrita: AuditActionType.process_bind_param() envia o .value do AuditAction
+  com cast explícito via literal_column para o tipo auditaction do PostgreSQL.
 """
-from sqlalchemy import Column, String, Text, ForeignKey, JSON
-from sqlalchemy.dialects.postgresql import UUID, ENUM as PG_ENUM
+from sqlalchemy import Column, String, Text, ForeignKey, JSON, TypeDecorator
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import enum
 
@@ -38,7 +41,7 @@ class AuditAction(str, enum.Enum):
     TERMINAL_COMMAND = "terminal_command"
     TERMINAL_CONNECTION_FAILED = "terminal_connection_failed"
 
-    # ── Automação (execução de comandos) ──────────────────────────────────────
+    # ── Automação ─────────────────────────────────────────────────────────────
     COMMAND_EXECUTED = "command_executed"
     COMMAND_FAILED = "command_failed"
 
@@ -81,12 +84,28 @@ class AuditAction(str, enum.Enum):
     IMPORT_DATA = "import_data"
 
 
-# Tipo PostgreSQL ENUM existente no banco — create_type=False para não recriar
-_audit_action_pg = PG_ENUM(
-    *[e.value for e in AuditAction],
-    name="auditaction",
-    create_type=False,
-)
+class AuditActionType(TypeDecorator):
+    """
+    TypeDecorator para a coluna action do AuditLog.
+
+    - Na LEITURA: retorna a string bruta do banco (aceita LOGIN e login).
+    - Na ESCRITA: extrai o .value do AuditAction enum e envia como string
+      que o PostgreSQL aceita via cast implícito VARCHAR::auditaction.
+    """
+    impl = String(100)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        """Converte AuditAction enum para string ao escrever no banco."""
+        if value is None:
+            return None
+        if isinstance(value, AuditAction):
+            return value.value
+        return str(value)
+
+    def process_result_value(self, value, dialect):
+        """Retorna a string bruta do banco sem tentar mapear para o enum."""
+        return value
 
 
 class AuditLog(Base, UUIDMixin, TimestampMixin):
@@ -96,9 +115,10 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
 
-    # Usa PG_ENUM com create_type=False para referenciar o ENUM existente no banco.
-    # O asyncpg faz o cast correto de VARCHAR → auditaction automaticamente.
-    action = Column(_audit_action_pg, nullable=False, index=True)
+    # AuditActionType: lê como string (compatível com MAIÚSCULO e minúsculo),
+    # escreve o .value do enum. O PostgreSQL aceita o cast VARCHAR::auditaction
+    # automaticamente para os valores que existem no ENUM do banco.
+    action = Column(AuditActionType, nullable=False, index=True)
 
     resource_type = Column(String(100), nullable=True)
     resource_id = Column(String(255), nullable=True)
