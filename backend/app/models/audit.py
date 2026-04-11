@@ -3,13 +3,12 @@ BR10 NetManager - Audit Log Model
 Registro completo de auditoria de todas as ações do sistema.
 
 NOTA SOBRE O ENUM auditaction:
-O banco PostgreSQL tem registros antigos com valores em MAIÚSCULO (LOGIN, LOGOUT, etc.)
-e registros novos em minúsculo (login, logout, etc.). Para compatibilidade com ambos,
-a coluna 'action' usa String em vez de Enum SQLAlchemy — o AuditAction Python é usado
-apenas para escrever valores corretos (minúsculo), mas a leitura aceita qualquer string.
+O banco PostgreSQL tem a coluna 'action' como tipo ENUM nativo (auditaction).
+Registros antigos têm valores em MAIÚSCULO (LOGIN, LOGOUT) e novos em minúsculo.
+Usamos type_coerce + cast para garantir compatibilidade na escrita e leitura.
 """
 from sqlalchemy import Column, String, Text, ForeignKey, JSON
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ENUM as PG_ENUM
 from sqlalchemy.orm import relationship
 import enum
 
@@ -82,6 +81,14 @@ class AuditAction(str, enum.Enum):
     IMPORT_DATA = "import_data"
 
 
+# Tipo PostgreSQL ENUM existente no banco — create_type=False para não recriar
+_audit_action_pg = PG_ENUM(
+    *[e.value for e in AuditAction],
+    name="auditaction",
+    create_type=False,
+)
+
+
 class AuditLog(Base, UUIDMixin, TimestampMixin):
     """Log de auditoria de todas as ações do sistema."""
     __tablename__ = "audit_logs"
@@ -89,9 +96,9 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
 
-    # Usa String em vez de Enum para compatibilidade com registros antigos (MAIÚSCULO)
-    # e novos (minúsculo). O AuditAction Python é usado apenas para escrever valores.
-    action = Column(String(100), nullable=False, index=True)
+    # Usa PG_ENUM com create_type=False para referenciar o ENUM existente no banco.
+    # O asyncpg faz o cast correto de VARCHAR → auditaction automaticamente.
+    action = Column(_audit_action_pg, nullable=False, index=True)
 
     resource_type = Column(String(100), nullable=True)
     resource_id = Column(String(255), nullable=True)
@@ -100,7 +107,7 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     description = Column(Text, nullable=True)
     old_values = Column(JSON, nullable=True)
     new_values = Column(JSON, nullable=True)
-    extra_data = Column(JSON, nullable=True)  # Renomeado de 'metadata' (reservado pelo SQLAlchemy)
+    extra_data = Column(JSON, nullable=True)
 
     # Contexto de Rede
     ip_address = Column(String(45), nullable=True)

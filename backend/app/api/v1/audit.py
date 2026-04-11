@@ -58,10 +58,17 @@ async def list_audit_logs(
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
 
-    # Filtro por ação
+    # Filtro por ação — case-insensitive para compatibilidade com registros antigos (MAIÚSCULO)
     if action:
-        query = query.where(AuditLog.action == action)
-        count_query = count_query.where(AuditLog.action == action)
+        action_upper = action.upper()
+        action_lower = action.lower()
+        action_filter = or_(
+            AuditLog.action == action,
+            AuditLog.action == action_upper,
+            AuditLog.action == action_lower,
+        )
+        query = query.where(action_filter)
+        count_query = count_query.where(action_filter)
 
     # Filtro por status
     if status:
@@ -100,7 +107,7 @@ async def list_audit_logs(
                 "device_id": str(log.device_id) if log.device_id else None,
                 "device_name": log.device.name if log.device else None,
                 "device_ip": log.device.management_ip if log.device else None,
-                "action": log.action.value if hasattr(log.action, "value") else str(log.action),
+                "action": str(log.action.value) if hasattr(log.action, "value") else str(log.action),
                 "resource_type": log.resource_type,
                 "resource_id": log.resource_id,
                 "description": log.description,
@@ -184,7 +191,7 @@ async def audit_summary(
         "recent_failures": [
             {
                 "id": str(log.id),
-                "action": log.action.value if hasattr(log.action, "value") else str(log.action),
+                "action": str(log.action.value) if hasattr(log.action, "value") else str(log.action),
                 "description": log.description,
                 "error_message": log.error_message,
                 "username": log.user.username if log.user else None,
