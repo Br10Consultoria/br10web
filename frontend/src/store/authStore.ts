@@ -25,6 +25,14 @@ interface AuthState {
   updateUser: (user: Partial<User>) => void
 }
 
+// Usa sessionStorage para que a sessão seja encerrada ao fechar o navegador.
+// Combinado com o hook useInactivityTimeout (5 min sem atividade = logout automático).
+const sessionStorageAdapter = {
+  getItem: (name: string) => sessionStorage.getItem(name),
+  setItem: (name: string, value: string) => sessionStorage.setItem(name, value),
+  removeItem: (name: string) => sessionStorage.removeItem(name),
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
@@ -34,20 +42,24 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
 
       setAuth: (user, accessToken, refreshToken) => {
-        localStorage.setItem('access_token', accessToken)
-        localStorage.setItem('refresh_token', refreshToken)
+        sessionStorage.setItem('access_token', accessToken)
+        sessionStorage.setItem('refresh_token', refreshToken)
+        // Limpar localStorage legado (migração silenciosa para usuários existentes)
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('refresh_token')
+        localStorage.removeItem('br10-auth')
         set({ user, accessToken, refreshToken, isAuthenticated: true })
       },
 
       clearAuth: () => {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+        sessionStorage.removeItem('access_token')
+        sessionStorage.removeItem('refresh_token')
         set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false })
       },
 
       logout: () => {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
+        sessionStorage.removeItem('access_token')
+        sessionStorage.removeItem('refresh_token')
         set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false })
       },
 
@@ -58,6 +70,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'br10-auth',
+      storage: sessionStorageAdapter,
       partialize: (state) => ({
         user: state.user,
         accessToken: state.accessToken,

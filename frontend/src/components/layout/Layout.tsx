@@ -2,9 +2,13 @@ import { useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Header from './Header'
+import { useInactivityTimeout } from '../../hooks/useInactivityTimeout'
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // Encerra a sessão automaticamente após 5 minutos de inatividade
+  useInactivityTimeout()
 
   return (
     <div className="flex h-screen bg-dark-950 overflow-hidden">
