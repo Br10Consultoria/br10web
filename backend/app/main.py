@@ -10,7 +10,6 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db
@@ -70,6 +69,11 @@ async def lifespan(app: FastAPI):
     logger.info("Encerrando BR10 NetManager...")
 
 
+# Documentação da API: disponível apenas em ambiente de desenvolvimento.
+# Em produção (ENVIRONMENT=production), /api/docs, /api/redoc e /api/openapi.json
+# retornam 404 para evitar exposição da estrutura interna da API.
+_is_production = settings.ENVIRONMENT == "production"
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
@@ -87,9 +91,9 @@ Sistema profissional de gerenciamento de dispositivos de rede.
 - **Backup**: Automático e manual dos dados
 - **API REST**: Documentação completa com OpenAPI
     """,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
+    docs_url=None if _is_production else "/api/docs",
+    redoc_url=None if _is_production else "/api/redoc",
+    openapi_url=None if _is_production else "/api/openapi.json",
     lifespan=lifespan,
 )
 
@@ -161,9 +165,11 @@ app.include_router(cgnat_router, prefix=API_PREFIX)
 app.include_router(users_router, prefix=API_PREFIX)
 
 # ─── Static Files ─────────────────────────────────────────────────────────────
-uploads_dir = settings.UPLOAD_DIR
-if os.path.exists(uploads_dir):
-    app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+# SEGURANÇA: O diretório de uploads NÃO é montado como rota pública.
+# Arquivos de upload (ex: fotos de dispositivos) são servidos exclusivamente
+# via endpoints autenticados em /api/v1/devices/{id}/photos/{filename},
+# que exigem token JWT válido antes de retornar o arquivo.
+# Isso evita acesso não autorizado a arquivos enviados ao servidor.
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────

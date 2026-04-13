@@ -103,8 +103,30 @@ export default function TerminalPage() {
     try {
       await initTerminal()
 
+      // Obter ticket de sessão de uso único (seguro — token JWT enviado via header, nunca na URL)
+      let wsTicket: string | null = null
+      try {
+        const ticketRes = await fetch(
+          `/api/v1/terminal/ticket/${id}`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken || ''}`,
+            },
+          }
+        )
+        if (ticketRes.ok) {
+          const ticketData = await ticketRes.json()
+          wsTicket = ticketData.ticket
+        }
+      } catch {
+        // fallback: usar token diretamente se endpoint de ticket não estiver disponível
+      }
+
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${wsProtocol}//${window.location.host}/api/v1/terminal/ws/${id}?token=${accessToken}&protocol=${protocol}`
+      const wsUrl = wsTicket
+        ? `${wsProtocol}//${window.location.host}/api/v1/terminal/ws/${id}?ticket=${wsTicket}&protocol=${protocol}`
+        : `${wsProtocol}//${window.location.host}/api/v1/terminal/ws/${id}?token=${encodeURIComponent(accessToken || '')}&protocol=${protocol}`
 
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws

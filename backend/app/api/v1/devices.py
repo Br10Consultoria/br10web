@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
 from sqlalchemy.orm import selectinload
@@ -587,6 +588,38 @@ async def list_photos(
         }
         for p in photos
     ]
+
+
+@router.get("/{device_id}/photos/{filename}")
+async def serve_photo(
+    device_id: str,
+    filename: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Serve o arquivo de foto de um dispositivo de forma autenticada.
+    Exige token JWT válido — o arquivo nunca é exposto publicamente.
+    """
+    # Verificar que a foto pertence ao dispositivo informado (evita path traversal)
+    result = await db.execute(
+        select(DevicePhoto).where(
+            DevicePhoto.device_id == device_id,
+            DevicePhoto.filename == filename,
+        )
+    )
+    photo = result.scalar_one_or_none()
+    if not photo:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Foto não encontrada")
+
+    if not os.path.exists(photo.file_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Arquivo não encontrado no servidor")
+
+    return FileResponse(
+        path=photo.file_path,
+        media_type=photo.mime_type or "image/jpeg",
+        filename=photo.original_filename or filename,
+    )
 
 
 @router.delete("/{device_id}/photos/{photo_id}")

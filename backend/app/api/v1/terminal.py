@@ -16,10 +16,12 @@ from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.security import decode_token, decrypt_field
+from app.core.ws_tickets import create_ticket, consume_ticket
 from app.models.device import Device
 from app.models.user import User
 from app.models.audit import AuditAction
 from app.core.audit_helper import log_audit
+from app.api.v1.auth import get_current_user
 from app.services.terminal import (
     SSHTerminalSession, TelnetTerminalSession, session_manager
 )
@@ -66,11 +68,36 @@ async def _write_audit(
     )
 
 
+@router.post("/ticket/{device_id}")
+async def create_terminal_ticket(
+    device_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Gera um ticket de sessão de uso único (TTL: 15s) para autenticação segura no WebSocket.
+    Autenticação via header Authorization: Bearer <token> (nunca via query string).
+    O frontend usa este ticket na URL do WebSocket em vez do token JWT,
+    evitando que o token apareça em logs de proxy, histórico do navegador ou ferramentas de dev.
+    """
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Dispositivo não encontrado")
+
+    ticket = await create_ticket(
+        user_id=str(current_user.id),
+        device_id=device_id,
+    )
+    return {"ticket": ticket, "expires_in": 15}
+
+
 @router.websocket("/ws/{device_id}")
 async def terminal_websocket(
     websocket: WebSocket,
     device_id: str,
-    token: str = Query(...),
+    ticket: str = Query(None),
+    token: str = Query(None),
     protocol: str = Query("ssh"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -97,8 +124,16 @@ async def terminal_websocket(
     # Capturar User-Agent para auditoria
     user_agent = websocket.headers.get("user-agent", None)
 
-    # Autenticar usuário
-    user = await authenticate_ws(token, db)
+    # Autenticar usuário — suporta ticket de uso único (seguro) ou token legado (compatibilidade)
+    user = None
+    if ticket:
+        user_id = await consume_ticket(ticket, device_id)
+        if user_id:
+            result_u = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
+            user = result_u.scalar_one_or_none()
+    elif token:
+        user = await authenticate_ws(token, db)
+
     if not user:
         await websocket.send_json({"type": "error", "message": "Token inválido ou expirado"})
         # Auditoria: tentativa de acesso sem autenticação
