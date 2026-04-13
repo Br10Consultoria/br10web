@@ -107,10 +107,30 @@ def _calculate_cgnat_params(
 ) -> dict:
     """
     Calcula todos os parâmetros necessários para geração do script CGNAT.
+
+    Segue a lógica do Gerador de CGNAT v2.1 (Rudimar Remontti):
+    - O tamanho do bloco público é 2^(32-prefixlen), NÃO o número de hosts.
+      Isso garante que o sub-bloco privado tenha a MESMA máscara do público,
+      condição obrigatória para o netmap funcionar corretamente.
+    - Os IPs públicos incluem TODOS os endereços do bloco (inclusive network
+      e broadcast), pois no CGNAT com netmap eles são todos utilizáveis.
+    - Os sub-blocos privados avançam alinhados ao CIDR (salto = tamanho do
+      bloco público), garantindo endereços válidos como .0, .16, .32, .64 etc.
     """
     public_net = ipaddress.ip_network(public_prefix_str, strict=False)
-    public_ips = list(public_net.hosts()) if public_net.prefixlen < 32 else [public_net.network_address]
-    total_public_ips = len(public_ips)
+
+    # CORREÇÃO: usar 2^(32-prefixlen) em vez de hosts()
+    # O netmap mapeia 1:1 todos os endereços do bloco, inclusive network e broadcast.
+    # Exemplo: /28 = 16 IPs (não 14), /26 = 64 IPs (não 62)
+    public_block_size = 2 ** (32 - public_net.prefixlen)
+    total_public_ips = public_block_size
+
+    # Lista sequencial de TODOS os IPs do bloco público (para o mapeamento)
+    public_net_addr_int = int(public_net.network_address)
+    public_ips = [
+        str(ipaddress.ip_address(public_net_addr_int + i))
+        for i in range(public_block_size)
+    ]
 
     if total_public_ips == 0:
         raise ValueError("O prefixo público não contém IPs utilizáveis")
@@ -121,12 +141,13 @@ def _calculate_cgnat_params(
     # Total de IPs privados = IPs públicos × clientes por IP
     total_private_ips = total_public_ips * clients_per_ip
 
-    # Tamanho do bloco privado por chain = número de IPs públicos
+    # Tamanho do bloco privado por chain = número de IPs do bloco público
+    # Isso garante que a máscara do sub-bloco privado = máscara do público
     private_block_size = total_public_ips
-    total_chains = total_private_ips // private_block_size  # = clients_per_ip
+    total_chains = clients_per_ip  # = total_private_ips // private_block_size
 
-    # Prefixlen do bloco privado por chain
-    private_chain_prefixlen = 32 - int(math.log2(private_block_size))
+    # Prefixlen do bloco privado por chain = MESMA máscara do bloco público
+    private_chain_prefixlen = public_net.prefixlen
 
     # Gerar IPs privados sequencialmente a partir de private_network
     private_start = ipaddress.ip_address(private_network_str)
@@ -140,6 +161,7 @@ def _calculate_cgnat_params(
         chain_number = sequential_chain + chain_idx
         chain_name = f"CGNAT_{chain_number}"
 
+        # Sub-bloco privado alinhado ao CIDR (salto = private_block_size)
         subnet_start_int = private_start_int + chain_idx * private_block_size
         subnet_start = ipaddress.ip_address(subnet_start_int)
         private_subnet = f"{subnet_start}/{private_chain_prefixlen}"
@@ -155,9 +177,10 @@ def _calculate_cgnat_params(
             "port_end": port_end,
         })
 
+        # Mapeamento 1:1 entre IPs privados e públicos dentro do bloco
         for ip_offset in range(private_block_size):
             private_ip = str(ipaddress.ip_address(subnet_start_int + ip_offset))
-            public_ip = str(public_ips[ip_offset % total_public_ips])
+            public_ip = public_ips[ip_offset]
             mappings.append({
                 "private_ip": private_ip,
                 "private_subnet": private_subnet,
@@ -172,6 +195,7 @@ def _calculate_cgnat_params(
     private_subnets_by_24: dict = {}
     for chain in chains:
         subnet_net = ipaddress.ip_network(chain["private_subnet"], strict=False)
+        # Calcular o /24 que contém este sub-bloco
         net_24 = ipaddress.ip_network(
             f"{subnet_net.network_address}/{min(24, private_chain_prefixlen)}", strict=False
         )
@@ -181,7 +205,7 @@ def _calculate_cgnat_params(
         private_subnets_by_24[net_24_str].append(chain)
 
     return {
-        "public_ips": [str(ip) for ip in public_ips],
+        "public_ips": public_ips,
         "total_public_ips": total_public_ips,
         "ports_per_client": ports_per_client,
         "total_private_ips": total_private_ips,
