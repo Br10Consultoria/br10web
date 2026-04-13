@@ -4,6 +4,8 @@ Motor de execução de playbooks com suporte a:
 - Telnet interativo (login automático, aguardar prompts, enviar comandos)
 - SSH interativo
 - Download FTP (do servidor FTP Mikrotik para o servidor BR10)
+- Download SCP (do dispositivo para o servidor BR10 via Paramiko/SFTP)
+- Envio de arquivo ao Telegram (sendDocument)
 - Substituição de variáveis em runtime ({FTP_HOST}, {CLIENT_NAME}, {DATE}, etc.)
 - Log passo a passo com status por passo
 """
@@ -447,6 +449,10 @@ class PlaybookRunner:
                 return self._step_ftp_download(params)
             elif step_type == "ftp_upload":
                 return False, "", "FTP upload ainda não implementado."
+            elif step_type == "scp_download":
+                return self._step_scp_download(params)
+            elif step_type == "telegram_send_file":
+                return self._step_telegram_send_file(params)
             elif step_type == "sleep":
                 seconds = float(params.get("seconds", 1))
                 time.sleep(seconds)
@@ -606,6 +612,126 @@ class PlaybookRunner:
             self._output_files.append(local_path)
 
         return success, msg, "" if success else msg
+
+    def _step_scp_download(self, params: Dict) -> Tuple[bool, str, str]:
+        """
+        Baixa um arquivo do dispositivo remoto via SCP (SFTP do Paramiko).
+        Pode usar a conexão SSH já aberta ou criar uma nova.
+
+        Parâmetros:
+          host         — IP do dispositivo (default: DEVICE_IP)
+          port         — porta SSH (default: 22)
+          username     — usuário SSH
+          password     — senha SSH
+          remote_path  — caminho do arquivo no dispositivo (ex: /backup.cfg)
+          local_dir    — diretório local de destino
+          filename     — nome do arquivo local (default: basename do remote_path)
+          timeout      — timeout em segundos
+        """
+        host = params.get("host", self.device_ip)
+        port = int(params.get("port", self.device_ssh_port))
+        username = params.get("username", self.device_username)
+        password = params.get("password", self.device_password)
+        remote_path = params.get("remote_path", "")
+        local_dir = params.get("local_dir", os.path.join(
+            DEVICE_BACKUP_DIR, "devices", self.client_name, self.variables.get("DATE", "")
+        ))
+        filename = params.get("filename", os.path.basename(remote_path) if remote_path else "backup.cfg")
+        timeout = int(params.get("timeout", 120))
+
+        if not remote_path:
+            return False, "", "Caminho remoto SCP não configurado."
+
+        try:
+            os.makedirs(local_dir, exist_ok=True)
+            local_path = os.path.join(local_dir, filename)
+
+            # Tentar reutilizar a conexão SSH aberta
+            ssh_client = None
+            created_new = False
+
+            if self._ssh and self._ssh._client:
+                ssh_client = self._ssh._client
+            else:
+                # Criar conexão SSH temporária apenas para o SCP
+                ssh_client = paramiko.SSHClient()
+                ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh_client.connect(
+                    hostname=host,
+                    port=port,
+                    username=username,
+                    password=password,
+                    timeout=timeout,
+                    allow_agent=False,
+                    look_for_keys=False,
+                )
+                created_new = True
+
+            # Usar SFTP (protocolo subjacente do SCP no Paramiko)
+            sftp = ssh_client.open_sftp()
+            sftp.get(remote_path, local_path)
+            sftp.close()
+
+            if created_new:
+                ssh_client.close()
+
+            file_size = os.path.getsize(local_path)
+            self._output_files.append(local_path)
+            return True, f"Arquivo baixado via SCP: {local_path} ({file_size} bytes)", ""
+
+        except FileNotFoundError:
+            return False, "", f"Arquivo não encontrado no dispositivo: {remote_path}"
+        except Exception as e:
+            return False, "", f"Erro SCP: {str(e)}"
+
+    def _step_telegram_send_file(self, params: Dict) -> Tuple[bool, str, str]:
+        """
+        Envia um arquivo ao Telegram via API sendDocument.
+
+        Parâmetros:
+          token    — Bot token do Telegram
+          chat_id  — Chat ID do Telegram
+          file     — caminho do arquivo local (ou 'latest' para usar o último output_file)
+          caption  — legenda do arquivo (suporta variáveis)
+        """
+        import requests as req_lib
+
+        token = params.get("token", self.variables.get("TELEGRAM_TOKEN", ""))
+        chat_id = params.get("chat_id", self.variables.get("TELEGRAM_CHAT_ID", ""))
+        file_path = params.get("file", "latest")
+        caption = params.get("caption", f"Backup {self.device_name} - {self.variables.get('DATETIME', '')}")
+
+        if not token or not chat_id:
+            return False, "", "Token ou Chat ID do Telegram não configurado."
+
+        # 'latest' = usar o último arquivo gerado pelo playbook
+        if file_path == "latest":
+            if not self._output_files:
+                return False, "", "Nenhum arquivo de backup gerado para enviar ao Telegram."
+            file_path = self._output_files[-1]
+
+        if not os.path.exists(file_path):
+            return False, "", f"Arquivo não encontrado: {file_path}"
+
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendDocument"
+            with open(file_path, "rb") as f:
+                resp = req_lib.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption[:1024]},
+                    files={"document": (os.path.basename(file_path), f)},
+                    timeout=60,
+                )
+
+            data = resp.json()
+            if resp.status_code == 200 and data.get("ok"):
+                return True, f"Arquivo enviado ao Telegram: {os.path.basename(file_path)}", ""
+            else:
+                err = data.get("description", f"HTTP {resp.status_code}")
+                return False, "", f"Erro Telegram: {err}"
+
+        except Exception as e:
+            return False, "", f"Erro ao enviar para Telegram: {str(e)}"
 
     def _close_connections(self) -> None:
         if self._telnet:

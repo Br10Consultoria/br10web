@@ -86,6 +86,22 @@ _FTP_PATTERNS = [
     r'(?:wget|curl)\s+.*?(?:ftp://[^\s]+/([^\s]+))',
 ]
 
+# Padrões de SCP DOWNLOAD
+_SCP_PATTERNS = [
+    # copy file scp://host filename (Datacom DmOS)
+    r'copy\s+file\s+scp://([^\s]+)\s+([^\s]+)',
+    # copy file filename scp://host (Datacom DmOS inverso)
+    r'copy\s+file\s+([^\s]+)\s+scp://([^\s]+)',
+    # scp user@host:/path /local/path
+    r'scp\s+([^\s]+@[^\s:]+:[^\s]+)\s+([^\s]+)',
+    # sftp.get(remote, local)
+    r'sftp\.get\s*\(\s*["\']([^"\']+)["\']',
+    # paramiko SFTPClient / open_sftp
+    r'open_sftp|SFTPClient',
+    # send_telnet_command(tn, f"copy file {filename} tftp://...") — Datacom via TFTP
+    r'copy\s+file\s+([^\s]+)\s+tftp://([^\s]+)',
+]
+
 # Padrões de SLEEP
 _SLEEP_PATTERNS = [
     r'time\.sleep\s*\(\s*([0-9.]+)\s*\)',
@@ -119,6 +135,10 @@ _VAR_PATTERNS = {
 # Palavras-chave que indicam conexão SSH vs Telnet
 _SSH_KEYWORDS = {'ssh', 'paramiko', 'netmiko', 'fabric', 'ConnectHandler', 'SSHClient'}
 _TELNET_KEYWORDS = {'telnet', 'telnetlib', 'Telnet'}
+
+# Palavras-chave que indicam transferência SCP/SFTP vs FTP/TFTP
+_SCP_KEYWORDS = {'scp', 'sftp', 'open_sftp', 'SFTPClient', 'scp://'}
+_FTP_KEYWORDS = {'ftp', 'ftplib', 'tftp', 'tftp://', 'ftp://'}
 
 
 # ─── Funções auxiliares ────────────────────────────────────────────────────────
@@ -184,7 +204,6 @@ def _parse_lines(content: str) -> List[Dict[str, Any]]:
     """
     lines = content.splitlines()
     steps: List[Dict[str, Any]] = []
-    seen_connect = False
 
     for idx, line in enumerate(lines):
         stripped = line.strip()
@@ -196,26 +215,30 @@ def _parse_lines(content: str) -> List[Dict[str, Any]]:
             continue
 
         label = _get_comment_before(lines, idx)
+        matched = False
 
-        # ── SLEEP ──────────────────────────────────────────────────────────────
-        for pat in _SLEEP_PATTERNS:
-            m = re.search(pat, stripped)
-            if m:
-                secs = float(m.group(1))
-                steps.append({
-                    'step_type': 'sleep',
-                    'params': {'seconds': secs},
-                    'label': label or f'Aguardar {secs}s',
-                    'confidence': 'high',
-                })
-                break
-        else:
-            # ── WAIT_FOR / EXPECT ───────────────────────────────────────────────
+        # ── SLEEP ────────────────────────────────────────────────────────────────────
+        if not matched:
+            for pat in _SLEEP_PATTERNS:
+                m = re.search(pat, stripped)
+                if m:
+                    secs = float(m.group(1))
+                    steps.append({
+                        'step_type': 'sleep',
+                        'params': {'seconds': secs},
+                        'label': label or f'Aguardar {secs}s',
+                        'confidence': 'high',
+                    })
+                    matched = True
+                    break
+
+        # ── WAIT_FOR / EXPECT ───────────────────────────────────────────────────────
+        if not matched:
             for pat in _WAIT_PATTERNS:
                 m = re.search(pat, stripped)
                 if m:
                     if m.lastindex and m.group(1) in ('read_very_eager', 'read_all'):
-                        wait_str = '#'  # aguardar prompt genérico
+                        wait_str = '#'
                     else:
                         wait_str = _clean_command(m.group(1)) if m.lastindex else '#'
                     steps.append({
@@ -224,54 +247,86 @@ def _parse_lines(content: str) -> List[Dict[str, Any]]:
                         'label': label or f'Aguardar: {wait_str[:40]}',
                         'confidence': 'high',
                     })
+                    matched = True
                     break
-            else:
-                # ── SEND_COMMAND ────────────────────────────────────────────────
-                for pat in _SEND_CMD_PATTERNS:
-                    m = re.search(pat, stripped)
-                    if m:
-                        cmd = _clean_command(m.group(1))
-                        if not cmd:
-                            break
-                        # Credenciais → send_string (sem aguardar prompt)
-                        if _is_login_command(cmd):
-                            steps.append({
-                                'step_type': 'send_string',
-                                'params': {'text': '{PASSWORD}' if 'password' in cmd.lower() else cmd},
-                                'label': label or 'Enviar credencial',
-                                'confidence': 'medium',
-                            })
-                        else:
-                            steps.append({
-                                'step_type': 'send_command',
-                                'params': {
-                                    'command': cmd,
-                                    'wait_string': '#',
-                                    'timeout': 30,
-                                },
-                                'label': label or f'Executar: {cmd[:50]}',
-                                'confidence': 'high',
-                            })
+
+        # ── SCP DOWNLOAD ──────────────────────────────────────────────────────────
+        if not matched:
+            for pat in _SCP_PATTERNS:
+                m = re.search(pat, stripped)
+                if m:
+                    fname = 'backup_{DEVICE_NAME}_{DATETIME}.cfg'
+                    if m.lastindex and m.lastindex >= 1:
+                        candidate = m.group(m.lastindex).strip()
+                        if '/' not in candidate and '://' not in candidate:
+                            fname = candidate
+                    steps.append({
+                        'step_type': 'scp_download',
+                        'params': {
+                            'host': '{DEVICE_IP}',
+                            'port': 22,
+                            'username': '{USERNAME}',
+                            'password': '{PASSWORD}',
+                            'remote_path': f'/{fname}',
+                            'local_dir': '/app/backups/devices/{CLIENT_NAME}/{DATE}',
+                            'filename': fname,
+                            'timeout': 120,
+                        },
+                        'label': label or f'Download SCP: {fname}',
+                        'confidence': 'medium',
+                    })
+                    matched = True
+                    break
+
+        # ── FTP DOWNLOAD ──────────────────────────────────────────────────────────
+        if not matched:
+            for pat in _FTP_PATTERNS:
+                m = re.search(pat, stripped)
+                if m:
+                    filename = m.group(1).strip() if m.lastindex else 'backup.cfg'
+                    steps.append({
+                        'step_type': 'ftp_download',
+                        'params': {
+                            'ftp_host': '{FTP_HOST}',
+                            'ftp_user': '{FTP_USER}',
+                            'ftp_pass': '{FTP_PASS}',
+                            'remote_path': f'{{FTP_DIR}}/{filename}',
+                            'local_filename': filename,
+                        },
+                        'label': label or f'Download FTP: {filename}',
+                        'confidence': 'medium',
+                    })
+                    matched = True
+                    break
+
+        # ── SEND_COMMAND ───────────────────────────────────────────────────────────
+        if not matched:
+            for pat in _SEND_CMD_PATTERNS:
+                m = re.search(pat, stripped)
+                if m:
+                    cmd = _clean_command(m.group(1))
+                    if not cmd:
                         break
-                else:
-                    # ── FTP DOWNLOAD ────────────────────────────────────────────
-                    for pat in _FTP_PATTERNS:
-                        m = re.search(pat, stripped)
-                        if m:
-                            filename = m.group(1).strip() if m.lastindex else 'backup.cfg'
-                            steps.append({
-                                'step_type': 'ftp_download',
-                                'params': {
-                                    'ftp_host': '{FTP_HOST}',
-                                    'ftp_user': '{FTP_USER}',
-                                    'ftp_pass': '{FTP_PASS}',
-                                    'remote_path': f'{{FTP_DIR}}/{filename}',
-                                    'local_filename': filename,
-                                },
-                                'label': label or f'Download FTP: {filename}',
-                                'confidence': 'medium',
-                            })
-                            break
+                    if _is_login_command(cmd):
+                        steps.append({
+                            'step_type': 'send_string',
+                            'params': {'text': '{PASSWORD}' if 'password' in cmd.lower() else cmd},
+                            'label': label or 'Enviar credencial',
+                            'confidence': 'medium',
+                        })
+                    else:
+                        steps.append({
+                            'step_type': 'send_command',
+                            'params': {
+                                'command': cmd,
+                                'wait_string': '#',
+                                'timeout': 30,
+                            },
+                            'label': label or f'Executar: {cmd[:50]}',
+                            'confidence': 'high',
+                        })
+                    matched = True
+                    break
 
     return steps
 
@@ -367,9 +422,182 @@ def _add_disconnect_step(steps: List[Dict]) -> List[Dict]:
     return steps
 
 
-# ─── Função principal ──────────────────────────────────────────────────────────
+# ─── Templates de playbook por vendor ────────────────────────────────────────────────
 
-# Mapeamento de vendor (bkpolts) para label amigável
+def _build_datacom_template(protocol: str = 'telnet') -> List[Dict[str, Any]]:
+    """
+    Gera o playbook template para Datacom DmOS.
+
+    Fluxo Telnet + TFTP:
+      1. Conectar via Telnet → login → config
+      2. save {BACKUP_FILENAME}
+      3. copy file {BACKUP_FILENAME} tftp://{TFTP_IP}
+      4. exit
+      5. Aguardar arquivo chegar via TFTP
+      6. Enviar ao Telegram
+
+    Fluxo SSH + SCP:
+      1. Conectar via SSH
+      2. show running-config | save overwrite {BACKUP_FILENAME}
+      3. copy file scp://{SCP_SERVER} {BACKUP_FILENAME}
+      4. exit
+      5. Baixar via SCP
+      6. Enviar ao Telegram
+    """
+    if protocol == 'ssh':
+        return [
+            {
+                'step_type': 'ssh_connect',
+                'params': {
+                    'host': '{DEVICE_IP}',
+                    'port': 22,
+                    'username': '{USERNAME}',
+                    'password': '{PASSWORD}',
+                },
+                'label': 'Conectar via SSH (Datacom DmOS)',
+                'order': 0,
+            },
+            {
+                'step_type': 'send_command',
+                'params': {
+                    'command': 'show running-config | save overwrite {BACKUP_FILENAME}',
+                    'wait_for': ['#'],
+                    'timeout': 120,
+                },
+                'label': 'Salvar configuração na OLT',
+                'order': 1,
+            },
+            {
+                'step_type': 'sleep',
+                'params': {'seconds': 5},
+                'label': 'Aguardar gravação',
+                'order': 2,
+            },
+            {
+                'step_type': 'send_command',
+                'params': {
+                    'command': 'copy file {BACKUP_FILENAME} scp://{SCP_SERVER}',
+                    'wait_for': ['#', 'Transfer complete', 'bytes copied'],
+                    'timeout': 180,
+                },
+                'label': 'Copiar backup via SCP para o servidor',
+                'order': 3,
+            },
+            {
+                'step_type': 'sleep',
+                'params': {'seconds': 10},
+                'label': 'Aguardar transferência SCP',
+                'order': 4,
+            },
+            {
+                'step_type': 'scp_download',
+                'params': {
+                    'host': '{DEVICE_IP}',
+                    'port': 22,
+                    'username': '{USERNAME}',
+                    'password': '{PASSWORD}',
+                    'remote_path': '/{BACKUP_FILENAME}',
+                    'local_dir': '/app/backups/devices/{CLIENT_NAME}/{DATE}',
+                    'filename': '{BACKUP_FILENAME}',
+                    'timeout': 120,
+                },
+                'label': 'Baixar backup via SCP',
+                'order': 5,
+            },
+            {
+                'step_type': 'disconnect',
+                'params': {},
+                'label': 'Encerrar conexão',
+                'order': 6,
+            },
+        ]
+    else:
+        # Telnet + TFTP (fluxo original do script Datacom)
+        return [
+            {
+                'step_type': 'telnet_connect',
+                'params': {
+                    'host': '{DEVICE_IP}',
+                    'port': 23,
+                    'username': '{USERNAME}',
+                    'password': '{PASSWORD}',
+                    'login_prompt': 'login:',
+                    'password_prompt': 'Password:',
+                },
+                'label': 'Conectar via Telnet (Datacom DmOS)',
+                'order': 0,
+            },
+            {
+                'step_type': 'wait_for',
+                'params': {
+                    'pattern': 'Welcome to the DmOS CLI',
+                    'timeout': 20,
+                },
+                'label': 'Aguardar banner DmOS',
+                'order': 1,
+            },
+            {
+                'step_type': 'send_command',
+                'params': {
+                    'command': 'config',
+                    'wait_for': ['#'],
+                    'timeout': 10,
+                },
+                'label': 'Entrar em modo config',
+                'order': 2,
+            },
+            {
+                'step_type': 'send_command',
+                'params': {
+                    'command': 'save {BACKUP_FILENAME}',
+                    'wait_for': ['#'],
+                    'timeout': 120,
+                },
+                'label': 'Salvar backup na OLT',
+                'order': 3,
+            },
+            {
+                'step_type': 'sleep',
+                'params': {'seconds': 90},
+                'label': 'Aguardar gravação interna (90s)',
+                'order': 4,
+            },
+            {
+                'step_type': 'send_command',
+                'params': {
+                    'command': 'copy file {BACKUP_FILENAME} tftp://{TFTP_IP}',
+                    'wait_for': ['#', 'Transfer complete', 'bytes copied'],
+                    'timeout': 180,
+                },
+                'label': 'Enviar backup para servidor TFTP',
+                'order': 5,
+            },
+            {
+                'step_type': 'send_command',
+                'params': {
+                    'command': 'exit',
+                    'wait_for': ['#', '>'],
+                    'timeout': 10,
+                },
+                'label': 'Sair do modo config',
+                'order': 6,
+            },
+            {
+                'step_type': 'disconnect',
+                'params': {},
+                'label': 'Encerrar conexão Telnet',
+                'order': 7,
+            },
+            {
+                'step_type': 'sleep',
+                'params': {'seconds': 30},
+                'label': 'Aguardar arquivo chegar via TFTP (30s)',
+                'order': 8,
+            },
+        ]
+
+
+# ─── Função principal ────────────────────────────────────────────────────────────────────Mapeamento de vendor (bkpolts) para label amigável
 VENDOR_LABELS: Dict[str, str] = {
     "huawei":        "Huawei",
     "zte":           "ZTE",
@@ -463,10 +691,27 @@ def import_script_to_playbook(
             if step['step_type'] == 'telnet_connect':
                 step['params']['login_prompt'] = 'Login:'
                 step['params']['password_prompt'] = 'Password:'
+    elif vendor == 'datacom':
+        # Datacom DmOS: Telnet + TFTP (ou SSH + SCP)
+        # Gerar playbook template completo para Datacom
+        protocol = _detect_protocol(content)
+        all_steps = _build_datacom_template(protocol)
+        variables['TFTP_IP'] = variables.get('TFTP_IP', '')
+        if not variables.get('FTP_HOST'):
+            variables['FTP_HOST'] = ''
+        name = 'Backup Datacom DmOS'
+    elif vendor == 'parks':
+        # Parks: Telnet, prompt ">"
+        for step in all_steps:
+            if step['step_type'] == 'telnet_connect':
+                step['params']['login_prompt'] = 'Username:'
+                step['params']['password_prompt'] = 'Password:'
+                step['label'] = 'Conectar via Telnet (Parks)'
 
     # 8. Gerar descrição automática
     n_cmds = sum(1 for s in all_steps if s['step_type'] == 'send_command')
     n_ftp = sum(1 for s in all_steps if s['step_type'] == 'ftp_download')
+    n_scp = sum(1 for s in all_steps if s['step_type'] == 'scp_download')
     desc_parts = [f'Importado de: {filename}', f'Protocolo: {protocol.upper()}']
     if vendor_label:
         desc_parts.insert(0, f'Vendor: {vendor_label}')
@@ -474,6 +719,8 @@ def import_script_to_playbook(
         desc_parts.append(f'{n_cmds} comando(s) detectado(s)')
     if n_ftp:
         desc_parts.append(f'{n_ftp} download(s) FTP')
+    if n_scp:
+        desc_parts.append(f'{n_scp} download(s) SCP')
     description = ' | '.join(desc_parts)
 
     # 9. Avisos

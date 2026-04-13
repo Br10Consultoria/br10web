@@ -628,6 +628,41 @@ async def get_step_types(current_user: User = Depends(get_current_user)):
             ],
         },
         {
+            "type": "send_string",
+            "label": "Enviar Texto",
+            "description": "Envia uma string sem aguardar resposta (ex: credenciais, confirmações)",
+            "params": [
+                {"key": "text", "label": "Texto", "default": "", "required": True},
+                {"key": "delay", "label": "Delay após envio (s)", "default": "0.3", "required": False},
+            ],
+        },
+        {
+            "type": "scp_download",
+            "label": "Baixar via SCP",
+            "description": "Baixa um arquivo do dispositivo via SCP/SFTP para o servidor BR10",
+            "params": [
+                {"key": "host", "label": "Host/IP", "default": "{DEVICE_IP}", "required": False},
+                {"key": "port", "label": "Porta SSH", "default": "22", "required": False},
+                {"key": "username", "label": "Usuário SSH", "default": "{USERNAME}", "required": False},
+                {"key": "password", "label": "Senha SSH", "default": "{PASSWORD}", "required": False},
+                {"key": "remote_path", "label": "Caminho remoto", "default": "/backup_{DEVICE_NAME}.cfg", "required": True},
+                {"key": "local_dir", "label": "Diretório local", "default": "/app/backups/devices/{CLIENT_NAME}/{DATE}", "required": False},
+                {"key": "filename", "label": "Nome do arquivo", "default": "{DEVICE_NAME}_{DATETIME}.cfg", "required": False},
+                {"key": "timeout", "label": "Timeout (s)", "default": "120", "required": False},
+            ],
+        },
+        {
+            "type": "telegram_send_file",
+            "label": "Enviar Arquivo ao Telegram",
+            "description": "Envia o arquivo de backup gerado como documento no Telegram",
+            "params": [
+                {"key": "token", "label": "Bot Token", "default": "{TELEGRAM_TOKEN}", "required": True},
+                {"key": "chat_id", "label": "Chat ID", "default": "{TELEGRAM_CHAT_ID}", "required": True},
+                {"key": "file", "label": "Arquivo", "default": "latest", "required": False},
+                {"key": "caption", "label": "Legenda", "default": "Backup {DEVICE_NAME} - {DATETIME}", "required": False},
+            ],
+        },
+        {
             "type": "disconnect",
             "label": "Desconectar",
             "description": "Encerra a conexão com o dispositivo",

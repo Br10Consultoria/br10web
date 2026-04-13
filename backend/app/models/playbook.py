@@ -39,6 +39,10 @@ class PlaybookStepType(str, enum.Enum):
     # Transferência de arquivos
     FTP_DOWNLOAD   = "ftp_download"     # Baixar arquivo do FTP para o servidor
     FTP_UPLOAD     = "ftp_upload"       # Enviar arquivo para FTP
+    SCP_DOWNLOAD   = "scp_download"     # Baixar arquivo do dispositivo via SCP
+
+    # Notificações
+    TELEGRAM_SEND_FILE = "telegram_send_file"  # Enviar arquivo ao Telegram
 
     # Utilitários
     SLEEP          = "sleep"            # Aguardar N segundos

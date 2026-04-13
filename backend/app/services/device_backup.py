@@ -46,6 +46,32 @@ async def send_telegram(token: str, chat_id: str, message: str) -> tuple[bool, s
         return False, str(e)
 
 
+async def send_telegram_file(
+    token: str,
+    chat_id: str,
+    file_path: str,
+    caption: str = "",
+) -> tuple[bool, str]:
+    """Envia um arquivo (documento) para o Telegram. Retorna (sucesso, erro)."""
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    if not os.path.exists(file_path):
+        return False, f"Arquivo não encontrado: {file_path}"
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            with open(file_path, "rb") as f:
+                resp = await client.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption[:1024]},
+                    files={"document": (os.path.basename(file_path), f)},
+                )
+            data = resp.json()
+            if resp.status_code == 200 and data.get("ok"):
+                return True, ""
+            return False, data.get("description", f"HTTP {resp.status_code}")
+    except Exception as e:
+        return False, str(e)
+
+
 def _build_telegram_message(
     schedule_name: str,
     execution: BackupExecution,
@@ -334,6 +360,7 @@ async def run_backup_schedule(
             (final_status in (BackupRunStatus.FAILURE, BackupRunStatus.PARTIAL) and schedule.telegram_on_error)
         )
         if should_notify:
+            # 1. Enviar mensagem de resumo
             msg = _build_telegram_message(schedule.name, execution, device_results)
             ok, err = await send_telegram(
                 schedule.telegram_token,
@@ -342,6 +369,23 @@ async def run_backup_schedule(
             )
             execution.telegram_sent = ok
             execution.telegram_error = err if not ok else None
+
+            # 2. Enviar arquivos de backup gerados como documentos
+            for dr in device_results:
+                output_files = dr.get("output_files", [])
+                for fpath in output_files:
+                    if os.path.exists(fpath):
+                        dev_name = dr.get("device_name", "dispositivo")
+                        caption = f"Backup {dev_name} - {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                        file_ok, file_err = await send_telegram_file(
+                            schedule.telegram_token,
+                            schedule.telegram_chat_id,
+                            fpath,
+                            caption=caption,
+                        )
+                        if not file_ok:
+                            logger.warning(f"Falha ao enviar arquivo {fpath} ao Telegram: {file_err}")
+
             await db.commit()
 
     logger.info(
