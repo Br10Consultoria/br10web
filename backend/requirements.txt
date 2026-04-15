@@ -27,3 +27,6 @@ apscheduler==3.10.4
 openai>=1.50.0
 # Ferramentas de rede - DNS lookup, DNSSEC
 dnspython==2.7.0
+# SNMP monitoring e gestão NETCONF
+pysnmp==6.2.6
+ncclient==0.6.15

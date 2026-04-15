@@ -16,13 +16,18 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from pysnmp.hlapi.v3arch.asyncio import (
-    SnmpEngine, CommunityData, UdpTransportTarget,
-    ContextData, ObjectType, ObjectIdentity,
-    getCmd, bulkCmd,
-)
-
 logger = logging.getLogger(__name__)
+
+try:
+    from pysnmp.hlapi.v3arch.asyncio import (
+        SnmpEngine, CommunityData, UdpTransportTarget,
+        ContextData, ObjectType, ObjectIdentity,
+        getCmd, bulkCmd,
+    )
+    PYSNMP_AVAILABLE = True
+except ImportError:
+    PYSNMP_AVAILABLE = False
+    logger.warning("pysnmp não instalado — módulo SNMP desabilitado. Execute: pip install pysnmp")
 
 # ─── OIDs ─────────────────────────────────────────────────────────────────────
 
@@ -76,6 +81,8 @@ BGP_STATE_NAMES = {
 
 async def snmp_get(host: str, community: str, oid: str, port: int = 161, timeout: int = 5) -> Any:
     """Executa um SNMP GET e retorna o valor ou None em caso de erro."""
+    if not PYSNMP_AVAILABLE:
+        return None
     try:
         engine = SnmpEngine()
         error_indication, error_status, error_index, var_binds = await getCmd(
@@ -97,6 +104,8 @@ async def snmp_get(host: str, community: str, oid: str, port: int = 161, timeout
 async def snmp_bulk_walk(host: str, community: str, oid: str, port: int = 161,
                          timeout: int = 10, max_rows: int = 512) -> list[tuple[str, str]]:
     """Executa SNMP BULK WALK e retorna lista de (oid_suffix, value)."""
+    if not PYSNMP_AVAILABLE:
+        return []
     results = []
     try:
         engine = SnmpEngine()
