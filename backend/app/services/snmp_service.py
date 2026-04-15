@@ -22,7 +22,7 @@ try:
     from pysnmp.hlapi.v3arch.asyncio import (
         SnmpEngine, CommunityData, UdpTransportTarget,
         ContextData, ObjectType, ObjectIdentity,
-        getCmd, bulkCmd,
+        get_cmd, walk_cmd,
     )
     PYSNMP_AVAILABLE = True
 except ImportError:
@@ -46,7 +46,15 @@ OID_HUAWEI_CPU_5MIN  = "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"
 # CPU genérico (HOST-RESOURCES-MIB) — fallback
 OID_HOST_CPU_LOAD    = "1.3.6.1.2.1.25.3.3.1.2"
 
-# Memória Huawei
+# Memória — HOST-RESOURCES-MIB (funciona em Huawei NetEngine 8000 e outros)
+OID_HR_STORAGE_TYPE  = "1.3.6.1.2.1.25.2.3.1.2"   # hrStorageType
+OID_HR_STORAGE_DESCR = "1.3.6.1.2.1.25.2.3.1.3"   # hrStorageDescr
+OID_HR_STORAGE_ALLOC = "1.3.6.1.2.1.25.2.3.1.4"   # hrStorageAllocationUnits (bytes)
+OID_HR_STORAGE_SIZE  = "1.3.6.1.2.1.25.2.3.1.5"   # hrStorageSize (em unidades)
+OID_HR_STORAGE_USED  = "1.3.6.1.2.1.25.2.3.1.6"   # hrStorageUsed (em unidades)
+# Tipo RAM: 1.3.6.1.2.1.25.2.1.2 = hrStorageRam
+HR_STORAGE_RAM_OID   = "1.3.6.1.2.1.25.2.1.2"
+# Fallback Huawei VRP (NE40/NE8000 pode não suportar)
 OID_HUAWEI_MEM_TOTAL = "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.37"  # bytes
 OID_HUAWEI_MEM_FREE  = "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.38"  # bytes
 
@@ -72,9 +80,13 @@ OID_BGP_PEER_IN_PREFIXES = "1.3.6.1.2.1.15.3.1.24" # bgpPeerInUpdateElapsedTime 
 OID_HUAWEI_BGP_PEER_PREFIXES = "1.3.6.1.4.1.2011.5.25.177.1.1.3.1.11"
 
 BGP_STATE_NAMES = {
-    1: "idle", 2: "connect", 3: "active",
+    0: "idle", 1: "idle", 2: "connect", 3: "active",
     4: "opensent", 5: "openconfirm", 6: "established",
 }
+
+# Prefixo base dos OIDs BGP (para filtrar o walk)
+BGP_PEER_STATE_BASE   = "1.3.6.1.2.1.15.3.1.2."
+BGP_PEER_REMOTE_AS_BASE = "1.3.6.1.2.1.15.3.1.9."
 
 
 # ─── Helper: SNMP GET ─────────────────────────────────────────────────────────
@@ -85,13 +97,15 @@ async def snmp_get(host: str, community: str, oid: str, port: int = 161, timeout
         return None
     try:
         engine = SnmpEngine()
-        error_indication, error_status, error_index, var_binds = await getCmd(
+        transport = await UdpTransportTarget.create((host, port), timeout=timeout, retries=1)
+        error_indication, error_status, error_index, var_binds = await get_cmd(
             engine,
             CommunityData(community, mpModel=1),  # mpModel=1 = SNMPv2c
-            await UdpTransportTarget.create((host, port), timeout=timeout, retries=1),
+            transport,
             ContextData(),
             ObjectType(ObjectIdentity(oid)),
         )
+        engine.close_dispatcher()
         if error_indication or error_status:
             return None
         for var_bind in var_binds:
@@ -103,31 +117,44 @@ async def snmp_get(host: str, community: str, oid: str, port: int = 161, timeout
 
 async def snmp_bulk_walk(host: str, community: str, oid: str, port: int = 161,
                          timeout: int = 10, max_rows: int = 512) -> list[tuple[str, str]]:
-    """Executa SNMP BULK WALK e retorna lista de (oid_suffix, value)."""
+    """
+    Executa SNMP WALK e retorna lista de (oid_str, value).
+    Para automaticamente quando sai da subárvore do OID base.
+    Usa walk_cmd (async generator) do pysnmp 7.x.
+    """
     if not PYSNMP_AVAILABLE:
         return []
     results = []
+    # Normalizar o OID base para comparar prefixo
+    base_prefix = oid.rstrip(".") + "."
+    engine = SnmpEngine()
     try:
-        engine = SnmpEngine()
-        async for error_indication, error_status, _, var_bind_table in bulkCmd(
+        transport = await UdpTransportTarget.create((host, port), timeout=timeout, retries=1)
+        async for error_indication, error_status, error_index, var_binds in walk_cmd(
             engine,
             CommunityData(community, mpModel=1),
-            await UdpTransportTarget.create((host, port), timeout=timeout, retries=1),
+            transport,
             ContextData(),
-            0, 25,
             ObjectType(ObjectIdentity(oid)),
-            lexicographicMode=False,
         ):
             if error_indication or error_status:
                 break
-            for var_bind in var_bind_table:
+            for var_bind in var_binds:
                 oid_str = str(var_bind[0])
+                # Parar se saiu da subárvore do OID base
+                if not oid_str.startswith(base_prefix):
+                    return results
                 val_str = var_bind[1].prettyPrint()
                 results.append((oid_str, val_str))
                 if len(results) >= max_rows:
                     return results
     except Exception as e:
         logger.debug(f"SNMP WALK {host} {oid}: {e}")
+    finally:
+        try:
+            engine.close_dispatcher()
+        except Exception:
+            pass
     return results
 
 
@@ -164,18 +191,27 @@ async def collect_system_info(host: str, community: str, port: int = 161) -> dic
 
 
 async def collect_cpu(host: str, community: str, port: int = 161) -> float | None:
-    """Coleta CPU usage (%). Tenta OID Huawei primeiro, depois fallback genérico."""
-    # Huawei VRP: walk na tabela de entidades para pegar o primeiro valor
-    rows = await snmp_bulk_walk(host, community, OID_HUAWEI_CPU_5MIN, port, max_rows=5)
-    for _, val in rows:
-        try:
-            cpu = float(val)
-            if 0 <= cpu <= 100:
-                return cpu
-        except (ValueError, TypeError):
-            pass
+    """
+    Coleta CPU usage (%).
+    Tenta OIDs Huawei VRP (5s, 1min, 5min) e fallback HOST-RESOURCES-MIB.
+    """
+    # Tentar todos os OIDs Huawei em paralelo
+    huawei_tasks = [
+        snmp_bulk_walk(host, community, OID_HUAWEI_CPU_5SEC, port, max_rows=3),
+        snmp_bulk_walk(host, community, OID_HUAWEI_CPU_1MIN, port, max_rows=3),
+        snmp_bulk_walk(host, community, OID_HUAWEI_CPU_5MIN, port, max_rows=3),
+    ]
+    huawei_results = await asyncio.gather(*huawei_tasks)
+    for rows in huawei_results:
+        for _, val in rows:
+            try:
+                cpu = float(val)
+                if 0 <= cpu <= 100:
+                    return cpu
+            except (ValueError, TypeError):
+                pass
 
-    # Fallback: HOST-RESOURCES-MIB
+    # Fallback: HOST-RESOURCES-MIB (hrProcessorLoad)
     rows = await snmp_bulk_walk(host, community, OID_HOST_CPU_LOAD, port, max_rows=5)
     for _, val in rows:
         try:
@@ -188,37 +224,60 @@ async def collect_cpu(host: str, community: str, port: int = 161) -> float | Non
 
 
 async def collect_memory(host: str, community: str, port: int = 161) -> dict:
-    """Coleta memória total e usada (Huawei VRP)."""
-    total_rows = await snmp_bulk_walk(host, community, OID_HUAWEI_MEM_TOTAL, port, max_rows=5)
-    free_rows  = await snmp_bulk_walk(host, community, OID_HUAWEI_MEM_FREE,  port, max_rows=5)
+    """
+    Coleta memória total e usada.
+    Usa HOST-RESOURCES-MIB (hrStorage) que funciona em Huawei NetEngine 8000 e outros.
+    Filtra a entrada de tipo RAM (hrStorageRam = 1.3.6.1.2.1.25.2.1.2).
+    """
+    tasks = [
+        snmp_bulk_walk(host, community, OID_HR_STORAGE_TYPE,  port, max_rows=20),
+        snmp_bulk_walk(host, community, OID_HR_STORAGE_ALLOC, port, max_rows=20),
+        snmp_bulk_walk(host, community, OID_HR_STORAGE_SIZE,  port, max_rows=20),
+        snmp_bulk_walk(host, community, OID_HR_STORAGE_USED,  port, max_rows=20),
+    ]
+    type_rows, alloc_rows, size_rows, used_rows = await asyncio.gather(*tasks)
 
-    total_bytes = None
-    free_bytes  = None
+    def _idx(rows):
+        return {oid_str.rsplit(".", 1)[-1]: val for oid_str, val in rows}
 
-    for _, val in total_rows:
+    type_map  = _idx(type_rows)
+    alloc_map = _idx(alloc_rows)
+    size_map  = _idx(size_rows)
+    used_map  = _idx(used_rows)
+
+    # Procurar entrada de RAM (type = hrStorageRam)
+    for idx, storage_type in type_map.items():
+        if HR_STORAGE_RAM_OID in storage_type or storage_type == HR_STORAGE_RAM_OID:
+            try:
+                alloc_bytes = int(alloc_map.get(idx, 1024))
+                total_units = int(size_map.get(idx, 0))
+                used_units  = int(used_map.get(idx, 0))
+                if total_units > 0:
+                    total_bytes = total_units * alloc_bytes
+                    used_bytes  = used_units  * alloc_bytes
+                    total_mb    = round(total_bytes / 1024 / 1024, 2)
+                    used_mb     = round(used_bytes  / 1024 / 1024, 2)
+                    usage_pct   = round((used_bytes / total_bytes) * 100, 2)
+                    return {"total_mb": total_mb, "used_mb": used_mb, "usage_pct": usage_pct}
+            except (ValueError, TypeError):
+                pass
+
+    # Fallback: primeira entrada com tamanho > 0 (pode ser RAM em alguns dispositivos)
+    for idx in size_map:
         try:
-            total_bytes = int(val)
-            break
+            alloc_bytes = int(alloc_map.get(idx, 1024))
+            total_units = int(size_map[idx])
+            used_units  = int(used_map.get(idx, 0))
+            if total_units > 0 and alloc_bytes >= 1024:  # pelo menos 1KB por unidade = provavelmente RAM
+                total_bytes = total_units * alloc_bytes
+                used_bytes  = used_units  * alloc_bytes
+                total_mb    = round(total_bytes / 1024 / 1024, 2)
+                used_mb     = round(used_bytes  / 1024 / 1024, 2)
+                usage_pct   = round((used_bytes / total_bytes) * 100, 2)
+                return {"total_mb": total_mb, "used_mb": used_mb, "usage_pct": usage_pct}
         except (ValueError, TypeError):
             pass
 
-    for _, val in free_rows:
-        try:
-            free_bytes = int(val)
-            break
-        except (ValueError, TypeError):
-            pass
-
-    if total_bytes and total_bytes > 0:
-        used_bytes = (total_bytes - free_bytes) if free_bytes is not None else None
-        used_mb    = round(used_bytes / 1024 / 1024, 2) if used_bytes is not None else None
-        total_mb   = round(total_bytes / 1024 / 1024, 2)
-        usage_pct  = round((used_bytes / total_bytes) * 100, 2) if used_bytes is not None else None
-        return {
-            "total_mb":  total_mb,
-            "used_mb":   used_mb,
-            "usage_pct": usage_pct,
-        }
     return {"total_mb": None, "used_mb": None, "usage_pct": None}
 
 
@@ -299,38 +358,48 @@ async def collect_interfaces(host: str, community: str, port: int = 161) -> list
 
 
 async def collect_bgp_sessions(host: str, community: str, port: int = 161) -> list[dict]:
-    """Coleta sessões BGP e seus estados."""
+    """
+    Coleta sessões BGP e seus estados.
+    Filtra apenas OIDs que pertencem à subarvore bgpPeerState e bgpPeerRemoteAs.
+    """
     tasks = [
         snmp_bulk_walk(host, community, OID_BGP_PEER_STATE,     port),
         snmp_bulk_walk(host, community, OID_BGP_PEER_REMOTE_AS, port),
     ]
     state_rows, as_rows = await asyncio.gather(*tasks)
 
-    def _peer_ip(oid_str: str, base_oid: str) -> str:
-        """Extrai o IP do peer a partir do OID (ex: .1.3.6.1.2.1.15.3.1.2.10.0.0.1 → 10.0.0.1)."""
-        suffix = oid_str[len(base_oid):].lstrip(".")
-        return suffix
-
     state_map = {}
     for oid_str, val in state_rows:
-        peer_ip = _peer_ip(oid_str, OID_BGP_PEER_STATE)
+        # Filtrar apenas OIDs que começam com o prefixo correto
+        if not oid_str.startswith(BGP_PEER_STATE_BASE):
+            continue
+        peer_ip = oid_str[len(BGP_PEER_STATE_BASE):]
+        # Validar que é um IPv4 válido (4 octetos)
+        parts = peer_ip.split(".")
+        if len(parts) != 4:
+            continue
         try:
-            state_map[peer_ip] = int(val)
+            if all(0 <= int(p) <= 255 for p in parts):
+                state_map[peer_ip] = int(val)
         except (ValueError, TypeError):
-            state_map[peer_ip] = 0
+            pass
 
     as_map = {}
     for oid_str, val in as_rows:
-        peer_ip = _peer_ip(oid_str, OID_BGP_PEER_REMOTE_AS)
+        if not oid_str.startswith(BGP_PEER_REMOTE_AS_BASE):
+            continue
+        peer_ip = oid_str[len(BGP_PEER_REMOTE_AS_BASE):]
+        parts = peer_ip.split(".")
+        if len(parts) != 4:
+            continue
         try:
-            as_map[peer_ip] = int(val)
+            if all(0 <= int(p) <= 255 for p in parts):
+                as_map[peer_ip] = int(val)
         except (ValueError, TypeError):
-            as_map[peer_ip] = 0
+            pass
 
     sessions = []
     for peer_ip, state in state_map.items():
-        if not peer_ip or len(peer_ip.split(".")) != 4:
-            continue
         sessions.append({
             "peer_ip":    peer_ip,
             "remote_as":  as_map.get(peer_ip, 0),
