@@ -381,6 +381,142 @@ async def run_blacklist_check_all():
         logger.error(f"[Scheduler] Erro na verificação de blacklist: {e}", exc_info=True)
 
 
+async def run_snmp_poll_all():
+    """
+    Task agendada: executa o poll SNMP de todos os targets ativos.
+    Executada a cada 5 minutos.
+    """
+    logger.info("[Scheduler] Iniciando poll SNMP de todos os targets ativos...")
+    try:
+        from app.models.snmp_monitor import SnmpTarget, SnmpMetric, SnmpAlert
+        from app.services.snmp_service import poll_target
+        from app.core.security import decrypt_field
+        from datetime import datetime, timezone
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(SnmpTarget).where(SnmpTarget.active == True)  # noqa: E712
+            )
+            targets = result.scalars().all()
+
+            if not targets:
+                logger.info("[Scheduler] Nenhum target SNMP ativo encontrado.")
+                return
+
+            logger.info(f"[Scheduler] Polling {len(targets)} target(s) SNMP...")
+            ok_count = error_count = 0
+
+            for target in targets:
+                try:
+                    community = decrypt_field(target.community_encrypted) if target.community_encrypted else "public"
+                    poll_result = await poll_target(
+                        host=target.host,
+                        community=community,
+                        port=target.port,
+                        collect_interfaces_flag=target.collect_interfaces,
+                        collect_bgp_flag=target.collect_bgp,
+                        collect_cpu_flag=target.collect_cpu,
+                        collect_memory_flag=target.collect_memory,
+                    )
+
+                    target.last_polled_at = poll_result["polled_at"]
+                    target.last_status = "ok" if poll_result["success"] else "error"
+                    target.last_error = poll_result.get("error")
+
+                    if poll_result["success"] and poll_result.get("system"):
+                        sys_info = poll_result["system"]
+                        if sys_info.get("sys_name"):
+                            target.sys_name = sys_info["sys_name"]
+                        if sys_info.get("sys_descr"):
+                            target.sys_descr = sys_info["sys_descr"]
+
+                    metrics_to_add = []
+
+                    if poll_result.get("cpu") is not None:
+                        metrics_to_add.append(SnmpMetric(
+                            target_id=target.id,
+                            metric_type="cpu_usage",
+                            value_float=poll_result["cpu"],
+                        ))
+
+                    mem = poll_result.get("memory", {})
+                    if mem.get("usage_pct") is not None:
+                        metrics_to_add.append(SnmpMetric(
+                            target_id=target.id,
+                            metric_type="memory_usage",
+                            value_float=mem["usage_pct"],
+                        ))
+
+                    sys_info = poll_result.get("system", {})
+                    if sys_info.get("uptime_seconds") is not None:
+                        metrics_to_add.append(SnmpMetric(
+                            target_id=target.id,
+                            metric_type="uptime_seconds",
+                            value_int=sys_info["uptime_seconds"],
+                        ))
+
+                    for iface in poll_result.get("interfaces", []):
+                        metrics_to_add.append(SnmpMetric(
+                            target_id=target.id,
+                            metric_type="if_oper_status",
+                            object_id=iface["index"],
+                            object_name=iface["name"],
+                            value_int=iface["oper_status"],
+                        ))
+
+                    for peer in poll_result.get("bgp", []):
+                        metrics_to_add.append(SnmpMetric(
+                            target_id=target.id,
+                            metric_type="bgp_peer_state",
+                            object_id=peer["peer_ip"],
+                            object_name=f"AS{peer['remote_as']}",
+                            value_int=peer["state"],
+                            value_str=peer["state_name"],
+                        ))
+
+                    # Alertas de threshold
+                    if poll_result.get("cpu") is not None and target.cpu_threshold:
+                        if poll_result["cpu"] >= target.cpu_threshold:
+                            db.add(SnmpAlert(
+                                target_id=target.id,
+                                severity="critical" if poll_result["cpu"] >= 90 else "warning",
+                                metric_type="cpu_usage",
+                                message=f"CPU em {poll_result['cpu']:.1f}% (threshold: {target.cpu_threshold}%)",
+                                value=poll_result["cpu"],
+                                threshold=target.cpu_threshold,
+                            ))
+
+                    if mem.get("usage_pct") is not None and target.memory_threshold:
+                        if mem["usage_pct"] >= target.memory_threshold:
+                            db.add(SnmpAlert(
+                                target_id=target.id,
+                                severity="critical" if mem["usage_pct"] >= 90 else "warning",
+                                metric_type="memory_usage",
+                                message=f"Memória em {mem['usage_pct']:.1f}% (threshold: {target.memory_threshold}%)",
+                                value=mem["usage_pct"],
+                                threshold=target.memory_threshold,
+                            ))
+
+                    for metric in metrics_to_add:
+                        db.add(metric)
+
+                    if poll_result["success"]:
+                        ok_count += 1
+                    else:
+                        error_count += 1
+                        logger.warning(f"[Scheduler] SNMP poll falhou para {target.name} ({target.host}): {poll_result.get('error')}")
+
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"[Scheduler] Erro no poll SNMP {target.name}: {e}")
+
+            await db.commit()
+            logger.info(f"[Scheduler] Poll SNMP concluído — OK: {ok_count}, Erros: {error_count}")
+
+    except Exception as e:
+        logger.error(f"[Scheduler] Erro no poll SNMP: {e}", exc_info=True)
+
+
 def start_scheduler():
     """Inicia o scheduler com todos os jobs agendados."""
     # Evitar iniciar múltiplas instâncias (problema com uvicorn --workers > 1)
@@ -432,10 +568,21 @@ def start_scheduler():
         misfire_grace_time=600,
     )
 
+    # Poll SNMP a cada 5 minutos
+    scheduler.add_job(
+        run_snmp_poll_all,
+        trigger=IntervalTrigger(minutes=5),
+        id="snmp_poll_all",
+        name="Poll SNMP de Targets Ativos (a cada 5min)",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
+    )
+
     scheduler.start()
     logger.info(
         "[Scheduler] Iniciado — status a cada 5min, RPKI às 06h/12h/22h, "
-        "Blacklist diariamente às 02h."
+        "Blacklist diariamente às 02h, SNMP poll a cada 5min."
     )
 
 

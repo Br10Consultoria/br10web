@@ -24,6 +24,7 @@ import DeviceBackupPage from './pages/DeviceBackupPage'
 import RpkiMonitorPage from './pages/RpkiMonitorPage'
 import CgnatPage from './pages/CgnatPage'
 import BlacklistMonitorPage from './pages/BlacklistMonitorPage'
+import SnmpMonitorPage from './pages/SnmpMonitorPage'
 
 function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
   const { isAuthenticated, user } = useAuthStore()
@@ -87,6 +88,7 @@ export default function App() {
           <Route path="rpki-monitor" element={<RpkiMonitorPage />} />
           <Route path="cgnat" element={<CgnatPage />} />
           <Route path="blacklist-monitor" element={<BlacklistMonitorPage />} />
+          <Route path="snmp-monitor" element={<SnmpMonitorPage />} />
           <Route path="automation" element={<AutomationPage />} />
           <Route path="playbooks" element={<PlaybooksPage />} />
           <Route path="ai-analysis" element={<AIAnalysisPage />} />

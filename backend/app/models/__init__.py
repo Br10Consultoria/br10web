@@ -16,6 +16,7 @@ from app.models.backup_schedule import (
 )
 from app.models.rpki_monitor import RpkiMonitor, RpkiCheck
 from app.models.blacklist_monitor import SystemApiKey, BlacklistMonitor, BlacklistCheck
+from app.models.snmp_monitor import SnmpTarget, SnmpMetric, SnmpAlert, NetconfActionLog
 from app.models.cgnat import CgnatConfig, CgnatMapping
 from app.models.permissions import UserPermission, UserClientScope, MODULES, ACCESS_LEVELS, MODULE_OPERATIONS
 from app.models.playbook import (
@@ -45,6 +46,8 @@ __all__ = [
     "RpkiMonitor", "RpkiCheck",
     # Monitor de Blacklist / Reputação IP
     "SystemApiKey", "BlacklistMonitor", "BlacklistCheck",
+    # Monitoramento SNMP + Gestão NETCONF/SSH
+    "SnmpTarget", "SnmpMetric", "SnmpAlert", "NetconfActionLog",
     # CGNAT
     "CgnatConfig", "CgnatMapping",
     # Permissões granulares
