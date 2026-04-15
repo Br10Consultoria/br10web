@@ -597,7 +597,546 @@ def _build_datacom_template(protocol: str = 'telnet') -> List[Dict[str, Any]]:
         ]
 
 
-# ─── Função principal ────────────────────────────────────────────────────────────────────Mapeamento de vendor (bkpolts) para label amigável
+# ─── Templates completos por vendor ─────────────────────────────────────────────────────
+
+
+def _build_huawei_template() -> List[Dict[str, Any]]:
+    """
+    Huawei OLT — Telnet + FTP
+    Fluxo: login → enable → backup configuration ftp → confirmação y → sleep 30s → exit → ftp_download → telegram
+    """
+    return [
+        {
+            'step_type': 'telnet_connect',
+            'params': {
+                'host': '{DEVICE_IP}',
+                'port': 23,
+                'username': '{USERNAME}',
+                'password': '{PASSWORD}',
+                'login_prompt': 'username:',
+                'password_prompt': 'password:',
+            },
+            'label': 'Conectar via Telnet (Huawei OLT)',
+            'order': 0,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'enable',
+                'wait_for': ['#'],
+                'timeout': 15,
+            },
+            'label': 'Entrar em modo privilegiado',
+            'order': 1,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'backup configuration ftp {FTP_IP} backup_{DEVICE_NAME}_{DATE}.cfg',
+                'wait_for': ['Are you sure to continue?', 'y/n'],
+                'timeout': 30,
+            },
+            'label': 'Executar backup configuration ftp',
+            'order': 2,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'y',
+                'wait_for': ['#', 'succeeded', 'complete'],
+                'timeout': 60,
+            },
+            'label': 'Confirmar envio do backup (y)',
+            'order': 3,
+        },
+        {
+            'step_type': 'sleep',
+            'params': {'seconds': 30},
+            'label': 'Aguardar upload FTP concluir (30s)',
+            'order': 4,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'exit',
+                'wait_for': ['>', '#', 'closed'],
+                'timeout': 10,
+            },
+            'label': 'Encerrar sessão Telnet',
+            'order': 5,
+        },
+        {
+            'step_type': 'disconnect',
+            'params': {},
+            'label': 'Desconectar',
+            'order': 6,
+        },
+        {
+            'step_type': 'ftp_download',
+            'params': {
+                'host': '{FTP_IP}',
+                'username': '{FTP_USER}',
+                'password': '{FTP_PASSWORD}',
+                'remote_file': 'backup_{DEVICE_NAME}_{DATE}.cfg',
+                'local_dir': '/app/backups/devices/{CLIENT_NAME}/{DATE}',
+                'timeout': 60,
+            },
+            'label': 'Baixar backup do servidor FTP',
+            'order': 7,
+        },
+        {
+            'step_type': 'telegram_send_file',
+            'params': {
+                'caption': 'Backup {DEVICE_NAME} — {DATETIME}',
+            },
+            'label': 'Enviar backup ao Telegram',
+            'order': 8,
+        },
+    ]
+
+
+def _build_zte_template(titan: bool = False) -> List[Dict[str, Any]]:
+    """
+    ZTE OLT — Telnet + FTP
+    Dois subtipos:
+      - Padrão: configure terminal → file upload cfg-startup startrun.dat ftp ...
+      - Titan:  copy ftp root: /datadisk0/DATA0/startrun.dat //<IP>/startrun.dat@user:pass
+    """
+    if titan:
+        backup_cmd = 'copy ftp root: /datadisk0/DATA0/startrun.dat //{FTP_IP}/startrun.dat@{FTP_USER}:{FTP_PASSWORD}'
+        steps_before_backup = []
+    else:
+        backup_cmd = 'file upload cfg-startup startrun.dat ftp ipaddress {FTP_IP} user {FTP_USER} password {FTP_PASSWORD}'
+        steps_before_backup = [
+            {
+                'step_type': 'send_command',
+                'params': {
+                    'command': 'configure terminal',
+                    'wait_for': ['#', '>'],
+                    'timeout': 10,
+                },
+                'label': 'Entrar em modo configure terminal',
+                'order': 2,
+            },
+        ]
+
+    label_prefix = 'ZTE Titan' if titan else 'ZTE'
+    base = [
+        {
+            'step_type': 'telnet_connect',
+            'params': {
+                'host': '{DEVICE_IP}',
+                'port': 23,
+                'username': '{USERNAME}',
+                'password': '{PASSWORD}',
+                'login_prompt': 'login:',
+                'password_prompt': 'Password:',
+            },
+            'label': f'Conectar via Telnet ({label_prefix})',
+            'order': 0,
+        },
+        {
+            'step_type': 'sleep',
+            'params': {'seconds': 3},
+            'label': 'Aguardar estabilização do prompt',
+            'order': 1,
+        },
+    ]
+
+    middle = steps_before_backup + [
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': backup_cmd,
+                'wait_for': ['#', '>', 'complete', 'success'],
+                'timeout': 30,
+            },
+            'label': f'Executar backup {label_prefix} via FTP',
+            'order': len(base) + len(steps_before_backup),
+        },
+        {
+            'step_type': 'sleep',
+            'params': {'seconds': 60},
+            'label': 'Aguardar upload FTP concluir (60s)',
+            'order': len(base) + len(steps_before_backup) + 1,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'exit',
+                'wait_for': ['>', '#', 'closed'],
+                'timeout': 10,
+            },
+            'label': 'Encerrar sessão',
+            'order': len(base) + len(steps_before_backup) + 2,
+        },
+        {
+            'step_type': 'disconnect',
+            'params': {},
+            'label': 'Desconectar',
+            'order': len(base) + len(steps_before_backup) + 3,
+        },
+        {
+            'step_type': 'ftp_download',
+            'params': {
+                'host': '{FTP_IP}',
+                'username': '{FTP_USER}',
+                'password': '{FTP_PASSWORD}',
+                'remote_file': 'startrun.dat',
+                'local_dir': '/app/backups/devices/{CLIENT_NAME}/{DATE}',
+                'rename_to': '{DEVICE_NAME}_{DATE}.dat',
+                'timeout': 60,
+            },
+            'label': 'Baixar startrun.dat do servidor FTP',
+            'order': len(base) + len(steps_before_backup) + 4,
+        },
+        {
+            'step_type': 'telegram_send_file',
+            'params': {
+                'caption': f'Backup {label_prefix} {{DEVICE_NAME}} — {{DATETIME}}',
+            },
+            'label': 'Enviar backup ao Telegram',
+            'order': len(base) + len(steps_before_backup) + 5,
+        },
+    ]
+
+    # Renumerar orders
+    all_steps = base + middle
+    for i, s in enumerate(all_steps):
+        s['order'] = i
+    return all_steps
+
+
+def _build_fiberhome_template() -> List[Dict[str, Any]]:
+    """
+    Fiberhome OLT — Telnet + FTP
+    Fluxo: Login: → User> → enable → Password: (2ª vez) → Admin# → upload ftp system ...
+    """
+    return [
+        {
+            'step_type': 'telnet_connect',
+            'params': {
+                'host': '{DEVICE_IP}',
+                'port': 23,
+                'username': '{USERNAME}',
+                'password': '{PASSWORD}',
+                'login_prompt': 'Login:',
+                'password_prompt': 'Password:',
+            },
+            'label': 'Conectar via Telnet (Fiberhome)',
+            'order': 0,
+        },
+        {
+            'step_type': 'wait_for',
+            'params': {
+                'pattern': 'User>',
+                'timeout': 20,
+            },
+            'label': 'Aguardar prompt User>',
+            'order': 1,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'enable',
+                'wait_for': ['Password:'],
+                'timeout': 10,
+            },
+            'label': 'Entrar em modo enable',
+            'order': 2,
+        },
+        {
+            'step_type': 'send_string',
+            'params': {
+                'text': '{PASSWORD}',
+            },
+            'label': 'Enviar senha do enable',
+            'order': 3,
+        },
+        {
+            'step_type': 'wait_for',
+            'params': {
+                'pattern': 'Admin#',
+                'timeout': 20,
+            },
+            'label': 'Aguardar prompt Admin#',
+            'order': 4,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'upload ftp system {FTP_IP} {FTP_USER} {FTP_PASSWORD} backup_{DEVICE_NAME}_{DATE}.cfg',
+                'wait_for': ['Admin#', 'Finished', 'successfully'],
+                'timeout': 60,
+            },
+            'label': 'Executar upload FTP (Fiberhome)',
+            'order': 5,
+        },
+        {
+            'step_type': 'sleep',
+            'params': {'seconds': 30},
+            'label': 'Aguardar upload FTP concluir (30s)',
+            'order': 6,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'exit',
+                'wait_for': ['>', '#', 'closed'],
+                'timeout': 10,
+            },
+            'label': 'Encerrar sessão',
+            'order': 7,
+        },
+        {
+            'step_type': 'disconnect',
+            'params': {},
+            'label': 'Desconectar',
+            'order': 8,
+        },
+        {
+            'step_type': 'ftp_download',
+            'params': {
+                'host': '{FTP_IP}',
+                'username': '{FTP_USER}',
+                'password': '{FTP_PASSWORD}',
+                'remote_file': 'backup_{DEVICE_NAME}_{DATE}.cfg',
+                'local_dir': '/app/backups/devices/{CLIENT_NAME}/{DATE}',
+                'timeout': 60,
+            },
+            'label': 'Baixar backup do servidor FTP',
+            'order': 9,
+        },
+        {
+            'step_type': 'telegram_send_file',
+            'params': {
+                'caption': 'Backup Fiberhome {DEVICE_NAME} — {DATETIME}',
+            },
+            'label': 'Enviar backup ao Telegram',
+            'order': 10,
+        },
+    ]
+
+
+def _build_intelbras_g16_template(method: str = 'ftp') -> List[Dict[str, Any]]:
+    """
+    Intelbras G16 — Telnet + FTP/TFTP/Local
+    Prompt: GPON#
+    Método: ftp (padrão), tftp ou local
+    """
+    if method == 'local':
+        backup_cmd = 'copy running-config startup-config'
+        wait_for = ['GPON#', 'OK', 'success']
+        download_steps: List[Dict[str, Any]] = []
+    elif method == 'tftp':
+        backup_cmd = 'upload configuration tftp inet {TFTP_IP} backup_{DEVICE_NAME}_{DATE}.cfg'
+        wait_for = ['GPON#', 'success', 'complete']
+        download_steps = [
+            {
+                'step_type': 'sleep',
+                'params': {'seconds': 30},
+                'label': 'Aguardar upload TFTP concluir (30s)',
+                'order': 6,
+            },
+            {
+                'step_type': 'telegram_send_file',
+                'params': {
+                    'caption': 'Backup Intelbras G16 {DEVICE_NAME} — {DATETIME}',
+                },
+                'label': 'Enviar backup ao Telegram',
+                'order': 7,
+            },
+        ]
+    else:  # ftp
+        backup_cmd = 'upload configuration ftp inet {FTP_IP} backup_{DEVICE_NAME}_{DATE}.cfg'
+        wait_for = ['GPON#', 'success', 'complete']
+        download_steps = [
+            {
+                'step_type': 'sleep',
+                'params': {'seconds': 30},
+                'label': 'Aguardar upload FTP concluir (30s)',
+                'order': 6,
+            },
+            {
+                'step_type': 'ftp_download',
+                'params': {
+                    'host': '{FTP_IP}',
+                    'username': '{FTP_USER}',
+                    'password': '{FTP_PASSWORD}',
+                    'remote_file': 'backup_{DEVICE_NAME}_{DATE}.cfg',
+                    'local_dir': '/app/backups/devices/{CLIENT_NAME}/{DATE}',
+                    'timeout': 60,
+                },
+                'label': 'Baixar backup do servidor FTP',
+                'order': 7,
+            },
+            {
+                'step_type': 'telegram_send_file',
+                'params': {
+                    'caption': 'Backup Intelbras G16 {DEVICE_NAME} — {DATETIME}',
+                },
+                'label': 'Enviar backup ao Telegram',
+                'order': 8,
+            },
+        ]
+
+    base = [
+        {
+            'step_type': 'telnet_connect',
+            'params': {
+                'host': '{DEVICE_IP}',
+                'port': 23,
+                'username': '{USERNAME}',
+                'password': '{PASSWORD}',
+                'login_prompt': 'Username:',
+                'password_prompt': 'Password:',
+            },
+            'label': 'Conectar via Telnet (Intelbras G16)',
+            'order': 0,
+        },
+        {
+            'step_type': 'wait_for',
+            'params': {
+                'pattern': 'GPON#',
+                'timeout': 20,
+            },
+            'label': 'Aguardar prompt GPON#',
+            'order': 1,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': backup_cmd,
+                'wait_for': wait_for,
+                'timeout': 60,
+            },
+            'label': f'Executar backup Intelbras G16 (método: {method.upper()})',
+            'order': 2,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'exit',
+                'wait_for': ['>', '#', 'closed'],
+                'timeout': 10,
+            },
+            'label': 'Encerrar sessão',
+            'order': 3,
+        },
+        {
+            'step_type': 'disconnect',
+            'params': {},
+            'label': 'Desconectar',
+            'order': 4,
+        },
+    ]
+
+    all_steps = base + download_steps
+    for i, s in enumerate(all_steps):
+        s['order'] = i
+    return all_steps
+
+
+def _build_parks_template() -> List[Dict[str, Any]]:
+    """
+    Parks OLT — Telnet + FTP
+    Fluxo especial: aguardar "Press <RETURN>" → ENTER → Username: → Password:
+    Comando: copy startup-config ftp://{FTP_IP}/{filename} {FTP_USER} {FTP_PASSWORD}
+    """
+    return [
+        {
+            'step_type': 'telnet_connect',
+            'params': {
+                'host': '{DEVICE_IP}',
+                'port': 23,
+                'username': '{USERNAME}',
+                'password': '{PASSWORD}',
+                'login_prompt': 'Username:',
+                'password_prompt': 'Password:',
+            },
+            'label': 'Conectar via Telnet (Parks)',
+            'order': 0,
+        },
+        {
+            'step_type': 'wait_for',
+            'params': {
+                'pattern': 'Press <RETURN> to get started',
+                'timeout': 20,
+            },
+            'label': 'Aguardar banner Parks',
+            'order': 1,
+        },
+        {
+            'step_type': 'send_string',
+            'params': {
+                'text': '',
+            },
+            'label': 'Pressionar ENTER para iniciar sessão',
+            'order': 2,
+        },
+        {
+            'step_type': 'sleep',
+            'params': {'seconds': 3},
+            'label': 'Aguardar estabilização do prompt',
+            'order': 3,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'copy startup-config ftp://{FTP_IP}/backup_{DEVICE_NAME}_{DATETIME}.bin {FTP_USER} {FTP_PASSWORD}',
+                'wait_for': ['#', '>', 'complete', 'success'],
+                'timeout': 30,
+            },
+            'label': 'Executar backup Parks via FTP',
+            'order': 4,
+        },
+        {
+            'step_type': 'sleep',
+            'params': {'seconds': 30},
+            'label': 'Aguardar upload FTP concluir (30s)',
+            'order': 5,
+        },
+        {
+            'step_type': 'send_command',
+            'params': {
+                'command': 'exit',
+                'wait_for': ['>', '#', 'closed'],
+                'timeout': 10,
+            },
+            'label': 'Encerrar sessão',
+            'order': 6,
+        },
+        {
+            'step_type': 'disconnect',
+            'params': {},
+            'label': 'Desconectar',
+            'order': 7,
+        },
+        {
+            'step_type': 'ftp_download',
+            'params': {
+                'host': '{FTP_IP}',
+                'username': '{FTP_USER}',
+                'password': '{FTP_PASSWORD}',
+                'remote_file': 'backup_{DEVICE_NAME}_{DATETIME}.bin',
+                'local_dir': '/app/backups/devices/{CLIENT_NAME}/{DATE}',
+                'timeout': 60,
+            },
+            'label': 'Baixar backup do servidor FTP',
+            'order': 8,
+        },
+        {
+            'step_type': 'telegram_send_file',
+            'params': {
+                'caption': 'Backup Parks {DEVICE_NAME} — {DATETIME}',
+            },
+            'label': 'Enviar backup ao Telegram',
+            'order': 9,
+        },
+    ]
+
+
+# ─── Mapeamento de vendor (bkpolts) para label amigável ────────────────────────
 VENDOR_LABELS: Dict[str, str] = {
     "huawei":        "Huawei",
     "zte":           "ZTE",
@@ -667,46 +1206,59 @@ def import_script_to_playbook(
     vendor_label = VENDOR_LABELS.get(vendor or '', '') if vendor else ''
     if vendor_label and vendor_label.lower() not in name.lower():
         name = f'Backup {vendor_label}'
-    # Ajustes específicos por vendor
-    if vendor == 'intelbras_g16':
-        # Intelbras G16 usa prompt GPON# — ajustar o passo de conexão telnet
-        for step in all_steps:
-            if step['step_type'] == 'telnet_connect':
-                step['params']['login_prompt'] = 'Username:'
-                step['params']['password_prompt'] = 'Password:'
-                step['label'] = 'Conectar via Telnet (Intelbras G16)'
-            if step['step_type'] == 'wait_for' and step['params'].get('wait_string') == '#':
-                step['params']['wait_string'] = 'GPON#'
-    elif vendor == 'huawei':
-        for step in all_steps:
-            if step['step_type'] == 'wait_for' and step['params'].get('wait_string') == '#':
-                step['params']['wait_string'] = '#'
-    elif vendor == 'zte':
-        for step in all_steps:
-            if step['step_type'] == 'telnet_connect':
-                step['params']['login_prompt'] = 'login:'
-                step['params']['password_prompt'] = 'Password:'
-    elif vendor == 'fiberhome':
-        for step in all_steps:
-            if step['step_type'] == 'telnet_connect':
-                step['params']['login_prompt'] = 'Login:'
-                step['params']['password_prompt'] = 'Password:'
-    elif vendor == 'datacom':
-        # Datacom DmOS: Telnet + TFTP (ou SSH + SCP)
-        # Gerar playbook template completo para Datacom
+    # ── Ajustes específicos por vendor: usar templates completos e fieis ao script original ──
+    if vendor == 'datacom':
         protocol = _detect_protocol(content)
         all_steps = _build_datacom_template(protocol)
-        variables['TFTP_IP'] = variables.get('TFTP_IP', '')
-        if not variables.get('FTP_HOST'):
-            variables['FTP_HOST'] = ''
+        variables.setdefault('TFTP_IP', '')
+        variables.setdefault('FTP_HOST', '')
         name = 'Backup Datacom DmOS'
+
+    elif vendor == 'huawei':
+        all_steps = _build_huawei_template()
+        variables.setdefault('FTP_IP', '')
+        variables.setdefault('FTP_USER', '')
+        variables.setdefault('FTP_PASSWORD', '')
+        name = 'Backup Huawei OLT'
+        protocol = 'telnet'
+
+    elif vendor == 'zte':
+        # Detectar se é ZTE Titan pelo conteúdo do script
+        is_titan = 'titan' in content.lower() or 'datadisk0' in content.lower() or 'ZTE_TITAN' in content
+        all_steps = _build_zte_template(titan=is_titan)
+        variables.setdefault('FTP_IP', '')
+        variables.setdefault('FTP_USER', '')
+        variables.setdefault('FTP_PASSWORD', '')
+        name = 'Backup ZTE Titan OLT' if is_titan else 'Backup ZTE OLT'
+        protocol = 'telnet'
+
+    elif vendor == 'fiberhome':
+        all_steps = _build_fiberhome_template()
+        variables.setdefault('FTP_IP', '')
+        variables.setdefault('FTP_USER', '')
+        variables.setdefault('FTP_PASSWORD', '')
+        name = 'Backup Fiberhome OLT'
+        protocol = 'telnet'
+
+    elif vendor == 'intelbras_g16':
+        # O script suporta ftp/tftp/local via var de ambiente INTELBRAS_BACKUP_METHOD.
+        # Usar ftp como padrão (mais comum). O usuário pode ajustar no playbook.
+        method = 'ftp'
+        all_steps = _build_intelbras_g16_template(method=method)
+        variables.setdefault('FTP_IP', '')
+        variables.setdefault('FTP_USER', '')
+        variables.setdefault('FTP_PASSWORD', '')
+        variables.setdefault('TFTP_IP', '')
+        name = 'Backup Intelbras G16'
+        protocol = 'telnet'
+
     elif vendor == 'parks':
-        # Parks: Telnet, prompt ">"
-        for step in all_steps:
-            if step['step_type'] == 'telnet_connect':
-                step['params']['login_prompt'] = 'Username:'
-                step['params']['password_prompt'] = 'Password:'
-                step['label'] = 'Conectar via Telnet (Parks)'
+        all_steps = _build_parks_template()
+        variables.setdefault('FTP_IP', '')
+        variables.setdefault('FTP_USER', '')
+        variables.setdefault('FTP_PASSWORD', '')
+        name = 'Backup Parks OLT'
+        protocol = 'telnet'
 
     # 8. Gerar descrição automática
     n_cmds = sum(1 for s in all_steps if s['step_type'] == 'send_command')
