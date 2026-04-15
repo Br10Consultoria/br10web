@@ -328,6 +328,59 @@ async def reload_backup_jobs():
         logger.error(f"[Scheduler] Erro ao recarregar jobs de backup: {e}", exc_info=True)
 
 
+async def run_blacklist_check_all():
+    """
+    Task agendada: verifica todos os monitores de blacklist ativos.
+    Executada diariamente às 02h (horário de Brasília).
+    """
+    logger.info("[Scheduler] Iniciando verificação de blacklist de todos os monitores...")
+    try:
+        from app.models.blacklist_monitor import BlacklistMonitor
+        from app.api.v1.blacklist_monitor import _do_blacklist_check
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(BlacklistMonitor).where(BlacklistMonitor.active == True)  # noqa: E712
+            )
+            monitors = result.scalars().all()
+
+            if not monitors:
+                logger.info("[Scheduler] Nenhum monitor de blacklist ativo encontrado.")
+                return
+
+            logger.info(f"[Scheduler] Verificando {len(monitors)} monitor(es) de blacklist...")
+            clean_count = listed_count = error_count = 0
+
+            for monitor in monitors:
+                try:
+                    check = await _do_blacklist_check(
+                        target=monitor.target,
+                        target_type=monitor.target_type,
+                        monitor=monitor,
+                        db=db,
+                        trigger_type="scheduled",
+                    )
+                    if check.status == "clean":
+                        clean_count += 1
+                    elif check.status == "listed":
+                        listed_count += 1
+                        logger.warning(
+                            f"[Scheduler] BLACKLIST: {monitor.name} — "
+                            f"{monitor.target} listado em {check.listed_count} blacklist(s)"
+                        )
+                    else:
+                        error_count += 1
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"[Scheduler] Erro ao verificar blacklist {monitor.name}: {e}")
+
+            logger.info(
+                f"[Scheduler] Verificação de blacklist concluída — "
+                f"Limpos: {clean_count}, Listados: {listed_count}, Erros: {error_count}"
+            )
+    except Exception as e:
+        logger.error(f"[Scheduler] Erro na verificação de blacklist: {e}", exc_info=True)
+
+
 def start_scheduler():
     """Inicia o scheduler com todos os jobs agendados."""
     # Evitar iniciar múltiplas instâncias (problema com uvicorn --workers > 1)
@@ -368,8 +421,22 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # Verificação de Blacklist diariamente às 02h (horário de Brasília)
+    scheduler.add_job(
+        run_blacklist_check_all,
+        trigger=CronTrigger(hour=2, minute=0, timezone="America/Bahia"),
+        id="blacklist_check_all",
+        name="Verificação de Blacklist (diária às 02h)",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+
     scheduler.start()
-    logger.info("[Scheduler] Iniciado — verificação de status a cada 5 minutos, RPKI às 06h/12h/22h.")
+    logger.info(
+        "[Scheduler] Iniciado — status a cada 5min, RPKI às 06h/12h/22h, "
+        "Blacklist diariamente às 02h."
+    )
 
 
 def stop_scheduler():

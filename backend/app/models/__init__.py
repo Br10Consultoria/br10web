@@ -15,6 +15,7 @@ from app.models.backup_schedule import (
     BackupSchedule, BackupExecution, BackupScheduleStatus, BackupRunStatus as BackupRunStatusEnum,
 )
 from app.models.rpki_monitor import RpkiMonitor, RpkiCheck
+from app.models.blacklist_monitor import SystemApiKey, BlacklistMonitor, BlacklistCheck
 from app.models.cgnat import CgnatConfig, CgnatMapping
 from app.models.permissions import UserPermission, UserClientScope, MODULES, ACCESS_LEVELS, MODULE_OPERATIONS
 from app.models.playbook import (
@@ -42,6 +43,8 @@ __all__ = [
     "PlaybookStatus", "PlaybookStepType",
     # Monitor RPKI
     "RpkiMonitor", "RpkiCheck",
+    # Monitor de Blacklist / Reputação IP
+    "SystemApiKey", "BlacklistMonitor", "BlacklistCheck",
     # CGNAT
     "CgnatConfig", "CgnatMapping",
     # Permissões granulares
