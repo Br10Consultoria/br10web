@@ -105,7 +105,39 @@ class SSHTerminalSession:
             if has_password:
                 connect_kwargs["password"] = self.password
 
-            self.client.connect(**connect_kwargs)
+            # Tentativa 1: autenticação padrão (password)
+            auth_ok = False
+            last_auth_error = None
+            try:
+                self.client.connect(**connect_kwargs)
+                auth_ok = True
+            except paramiko.AuthenticationException as e:
+                last_auth_error = e
+                logger.debug(f"SSH password auth falhou em {self.host}:{self.port}, tentando keyboard-interactive...")
+
+            # Tentativa 2: keyboard-interactive (PAM / servidores Linux)
+            if not auth_ok and has_password:
+                try:
+                    transport = paramiko.Transport((self.host, self.port))
+                    transport.connect()
+                    _pwd = self.password
+                    def _ki_handler(title, instructions, prompt_list):
+                        return [_pwd for _ in prompt_list]
+                    transport.auth_interactive(self.username, _ki_handler)
+                    # Substituir o transport no client
+                    self.client._transport = transport
+                    auth_ok = True
+                    logger.debug(f"SSH keyboard-interactive auth OK em {self.host}:{self.port}")
+                except paramiko.AuthenticationException as e:
+                    logger.debug(f"SSH keyboard-interactive também falhou em {self.host}:{self.port}: {e}")
+                    last_auth_error = e
+                except Exception as e:
+                    logger.debug(f"SSH keyboard-interactive erro em {self.host}:{self.port}: {e}")
+
+            if not auth_ok:
+                raise paramiko.AuthenticationException(
+                    str(last_auth_error) if last_auth_error else "Authentication failed"
+                )
 
             self.channel = self.client.invoke_shell(
                 term="xterm-256color",
