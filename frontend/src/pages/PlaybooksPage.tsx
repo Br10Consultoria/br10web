@@ -9,6 +9,7 @@ import {
   CheckCheck, Eye, Wifi, WifiOff,
 } from 'lucide-react';
 import api from '../utils/api';
+import { PlaybookTerminal } from '../components/playbooks/PlaybookTerminal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1156,6 +1157,8 @@ export default function PlaybooksPage() {
   const [showImport, setShowImport] = useState(false);
   const [editingPlaybook, setEditingPlaybook] = useState<Playbook | undefined>();
   const [executingPlaybook, setExecutingPlaybook] = useState<Playbook | undefined>();
+  const [terminalPlaybook, setTerminalPlaybook] = useState<Playbook | undefined>();
+  const [terminalDevice, setTerminalDevice] = useState<{id: string; name: string} | undefined>();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
 
@@ -1313,8 +1316,16 @@ export default function PlaybooksPage() {
                       <button
                         onClick={() => setExecutingPlaybook(pb)}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs rounded-lg"
+                        title="Executar (ver resultado ao final)"
                       >
                         <Play className="w-3.5 h-3.5" /> Executar
+                      </button>
+                      <button
+                        onClick={() => setTerminalPlaybook(pb)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0d1b35] hover:bg-[#1a2a4a] text-cyan-400 hover:text-cyan-300 text-xs rounded-lg border border-[#2a3a5c] hover:border-cyan-700"
+                        title="Executar com Terminal ao Vivo"
+                      >
+                        <Terminal className="w-3.5 h-3.5" /> Terminal
                       </button>
                       <button
                         onClick={() => { setEditingPlaybook(pb); setShowForm(true); }}
@@ -1405,6 +1416,138 @@ export default function PlaybooksPage() {
           onClose={() => setExecutingPlaybook(undefined)}
         />
       )}
+
+      {terminalPlaybook && (
+        <TerminalLauncher
+          playbook={terminalPlaybook}
+          onClose={() => setTerminalPlaybook(undefined)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Terminal Launcher (seleciona dispositivo antes de abrir o terminal) ────────
+
+function TerminalLauncher({
+  playbook,
+  onClose,
+}: {
+  playbook: Playbook;
+  onClose: () => void;
+}) {
+  const [selectedClient, setSelectedClient] = useState('');
+  const [selectedDevice, setSelectedDevice] = useState('');
+  const [varOverrides, setVarOverrides] = useState<Record<string, string>>({});
+  const [showTerminal, setShowTerminal] = useState(false);
+
+  const { data: clients = [] } = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get('/clients').then(r => r.data),
+  });
+  const { data: devices = [] } = useQuery({
+    queryKey: ['devices', selectedClient],
+    queryFn: () => api.get('/devices', { params: selectedClient ? { client_id: selectedClient } : {} }).then(r => r.data),
+  });
+
+  const AUTO_VARS = ['HOST', 'DEVICE_IP', 'USERNAME', 'PASSWORD', 'DEVICE_NAME', 'DATE', 'DATETIME'];
+  const varEntries = Object.entries(playbook.variables || {}).filter(([k]) => !AUTO_VARS.includes(k));
+  const selectedDeviceObj = devices.find((d: any) => d.id === selectedDevice);
+
+  if (showTerminal && selectedDevice) {
+    return (
+      <PlaybookTerminal
+        playbookId={playbook.id}
+        playbookName={playbook.name}
+        deviceId={selectedDevice}
+        deviceName={selectedDeviceObj?.name || selectedDevice}
+        variablesOverride={varOverrides}
+        onClose={onClose}
+      />
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-[#0d1b35] border border-[#2a3a5c] rounded-xl w-full max-w-lg">
+        <div className="flex items-center justify-between p-4 border-b border-[#2a3a5c]">
+          <h2 className="text-base font-semibold text-white flex items-center gap-2">
+            <Terminal className="w-4 h-4 text-cyan-400" />
+            Terminal ao Vivo — {playbook.name}
+          </h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-white"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-4 space-y-4">
+          {/* Seleção de cliente e dispositivo */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Cliente</label>
+              <select
+                value={selectedClient}
+                onChange={e => { setSelectedClient(e.target.value); setSelectedDevice(''); }}
+                className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-2 py-2 text-sm text-white"
+              >
+                <option value="">Todos os clientes</option>
+                {clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Dispositivo <span className="text-red-400">*</span></label>
+              <select
+                value={selectedDevice}
+                onChange={e => setSelectedDevice(e.target.value)}
+                className="w-full bg-[#1a2a4a] border border-[#2a3a5c] rounded px-2 py-2 text-sm text-white"
+              >
+                <option value="">Selecione...</option>
+                {devices.map((d: any) => <option key={d.id} value={d.id}>{d.name} ({d.management_ip})</option>)}
+              </select>
+            </div>
+          </div>
+
+          {/* Variáveis customizáveis */}
+          {varEntries.length > 0 && (
+            <div>
+              <label className="block text-xs text-gray-400 mb-2">Variáveis do Playbook</label>
+              <div className="space-y-2">
+                {varEntries.map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-blue-400 w-32 shrink-0">{k}</span>
+                    <input
+                      type="text"
+                      defaultValue={v}
+                      onChange={e => setVarOverrides(prev => ({ ...prev, [k]: e.target.value }))}
+                      className="flex-1 bg-[#0a1628] border border-[#2a3a5c] rounded px-2 py-1.5 text-xs text-white font-mono"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Info dos passos */}
+          <div className="bg-[#0a1628] rounded-lg p-3">
+            <p className="text-xs text-gray-500 mb-2">{playbook.steps.length} passo(s) a executar:</p>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {playbook.steps.sort((a, b) => a.order - b.order).map((s, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs text-gray-400">
+                  <span className="w-4 h-4 rounded-full bg-[#1a2a4a] flex items-center justify-center text-gray-600 text-[10px] shrink-0">{i + 1}</span>
+                  <span>{s.label || s.step_type}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 p-4 border-t border-[#2a3a5c]">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-white">Cancelar</button>
+          <button
+            onClick={() => setShowTerminal(true)}
+            disabled={!selectedDevice}
+            className="flex items-center gap-2 px-4 py-2 bg-cyan-700 hover:bg-cyan-600 text-white text-sm rounded-lg disabled:opacity-50"
+          >
+            <Terminal className="w-4 h-4" /> Abrir Terminal
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

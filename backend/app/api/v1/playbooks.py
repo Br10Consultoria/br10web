@@ -9,8 +9,11 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import json
+import queue
+import threading
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -517,6 +520,209 @@ async def execute_playbook(
     )
 
     return _execution_to_dict(execution)
+
+
+@playbooks_router.post("/{playbook_id}/execute/stream")
+async def execute_playbook_stream(
+    playbook_id: str,
+    req: PlaybookExecuteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Executa um playbook e transmite os eventos de cada passo via Server-Sent Events (SSE).
+    O cliente recebe um evento JSON por passo, em tempo real, conforme a execução avança.
+    """
+    # ── Buscar playbook e dispositivo (mesmo fluxo do endpoint normal) ──
+    pb_result = await db.execute(
+        select(Playbook)
+        .options(selectinload(Playbook.steps))
+        .where(Playbook.id == playbook_id)
+    )
+    pb = pb_result.scalar_one_or_none()
+    if not pb:
+        raise HTTPException(status_code=404, detail="Playbook não encontrado.")
+
+    dev_result = await db.execute(select(Device).where(Device.id == req.device_id))
+    device = dev_result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Dispositivo não encontrado.")
+
+    cred_res = await db.execute(
+        select(DeviceCredential).where(
+            DeviceCredential.device_id == device.id,
+            DeviceCredential.is_active == True,
+        ).order_by(DeviceCredential.id)
+    )
+    credential = cred_res.scalars().first()
+
+    password = ""
+    username = device.username or ""
+    if credential:
+        if credential.password_encrypted:
+            try:
+                password = decrypt_field(credential.password_encrypted)
+            except Exception:
+                password = ""
+        if credential.username:
+            username = credential.username
+    elif device.password_encrypted:
+        try:
+            password = decrypt_field(device.password_encrypted)
+        except Exception:
+            password = ""
+
+    variables = dict(pb.variables or {})
+    auto_vars = {
+        "HOST":        device.management_ip,
+        "DEVICE_IP":   device.management_ip,
+        "USERNAME":    username,
+        "PASSWORD":    password,
+        "DEVICE_NAME": device.name,
+        "DATE":        datetime.utcnow().strftime("%Y-%m-%d"),
+        "DATETIME":    datetime.utcnow().strftime("%Y%m%d_%H%M%S"),
+    }
+    variables.update(auto_vars)
+    variables.update(req.variables_override)
+
+    # Criar registro de execução
+    execution = PlaybookExecution(
+        playbook_id=pb.id,
+        device_id=device.id,
+        user_id=current_user.id,
+        playbook_name=pb.name,
+        device_name=device.name,
+        device_ip=device.management_ip,
+        client_name=getattr(device, "client_name", "") or "",
+        variables_used={k: v for k, v in variables.items() if k not in ("PASSWORD", "password")},
+        status=PlaybookRunStatus.RUNNING,
+        total_steps=len(pb.steps),
+    )
+    db.add(execution)
+    await db.commit()
+    execution_id = str(execution.id)
+
+    steps_data = [
+        {
+            "step_type": s.step_type.value if hasattr(s.step_type, "value") else s.step_type,
+            "params": s.params or {},
+            "label": s.label,
+            "on_error": s.on_error,
+        }
+        for s in sorted(pb.steps, key=lambda x: x.order)
+    ]
+
+    # Fila thread-safe para comunicar eventos do runner (thread) ao gerador SSE (async)
+    event_queue: queue.Queue = queue.Queue()
+    SENTINEL = object()  # sinal de fim
+
+    def on_step(entry: dict):
+        event_queue.put(entry)
+
+    def run_in_thread():
+        try:
+            runner = PlaybookRunner(
+                steps=steps_data,
+                variables=variables,
+                device_name=device.name,
+                device_ip=device.management_ip,
+                device_username=username,
+                device_password=password,
+                device_telnet_port=device.telnet_port or 23,
+                device_ssh_port=device.ssh_port or 22,
+                client_name=execution.client_name or "",
+                on_step_callback=on_step,
+            )
+            result = runner.run()
+            event_queue.put({"__done__": True, "result": result})
+        except Exception as exc:
+            event_queue.put({"__done__": True, "result": {
+                "status": "error",
+                "step_logs": [],
+                "output_files": [],
+                "error_message": str(exc),
+                "duration_ms": 0,
+            }})
+        finally:
+            event_queue.put(SENTINEL)
+
+    # Iniciar execução em thread separada
+    thread = threading.Thread(target=run_in_thread, daemon=True)
+    thread.start()
+
+    async def event_generator():
+        # Evento inicial: lista de passos para o frontend montar a UI
+        meta = {
+            "__meta__": True,
+            "execution_id": execution_id,
+            "playbook_name": pb.name,
+            "device_name": device.name,
+            "device_ip": device.management_ip,
+            "total_steps": len(steps_data),
+            "steps_info": [
+                {"index": i + 1, "label": s.get("label") or s.get("step_type"), "type": s.get("step_type")}
+                for i, s in enumerate(steps_data)
+            ],
+        }
+        yield f"data: {json.dumps(meta)}\n\n"
+
+        loop = asyncio.get_event_loop()
+        result_data = None
+
+        while True:
+            try:
+                # Verificar a fila sem bloquear o event loop
+                item = await loop.run_in_executor(None, lambda: event_queue.get(timeout=0.1))
+                if item is SENTINEL:
+                    break
+                if isinstance(item, dict) and item.get("__done__"):
+                    result_data = item["result"]
+                    continue
+                yield f"data: {json.dumps(item)}\n\n"
+            except queue.Empty:
+                # Heartbeat para manter a conexão SSE viva
+                yield ": heartbeat\n\n"
+                await asyncio.sleep(0.1)
+
+        # Evento final com resumo
+        if result_data:
+            final = {
+                "__final__": True,
+                "execution_id": execution_id,
+                "status": result_data["status"],
+                "error_message": result_data.get("error_message", ""),
+                "duration_ms": result_data.get("duration_ms", 0),
+                "output_files": result_data.get("output_files", []),
+            }
+            yield f"data: {json.dumps(final)}\n\n"
+
+            # Atualizar banco em background
+            async def _update_db():
+                try:
+                    async with db.begin():
+                        exec_obj = await db.get(PlaybookExecution, execution.id)
+                        if exec_obj:
+                            exec_obj.status = PlaybookRunStatus.SUCCESS if result_data["status"] == "success" else PlaybookRunStatus.ERROR
+                            exec_obj.step_logs = result_data["step_logs"]
+                            exec_obj.output_files = result_data["output_files"]
+                            exec_obj.error_message = result_data.get("error_message")
+                            exec_obj.duration_ms = result_data["duration_ms"]
+                            exec_obj.finished_at = datetime.utcnow()
+                            exec_obj.current_step = len(result_data["step_logs"])
+                except Exception as e:
+                    logger.error(f"Erro ao atualizar execução SSE no banco: {e}")
+
+            asyncio.create_task(_update_db())
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Desabilitar buffer do nginx
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @playbooks_router.get("/{playbook_id}/executions")

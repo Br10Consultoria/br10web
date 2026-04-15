@@ -320,6 +320,7 @@ class PlaybookRunner:
         device_telnet_port: int = 23,
         device_ssh_port: int = 22,
         client_name: str = "",
+        on_step_callback=None,  # callable(entry: dict) chamado após cada passo
     ):
         self.steps = steps
         self.device_name = device_name
@@ -329,6 +330,7 @@ class PlaybookRunner:
         self.device_telnet_port = device_telnet_port
         self.device_ssh_port = device_ssh_port
         self.client_name = client_name
+        self._on_step_callback = on_step_callback
 
         # Construir variáveis de runtime
         self.variables = _build_runtime_vars(
@@ -369,6 +371,12 @@ class PlaybookRunner:
             "timestamp": datetime.now().isoformat(),
         }
         self._step_logs.append(entry)
+        # Emitir evento para o callback de streaming (SSE)
+        if self._on_step_callback:
+            try:
+                self._on_step_callback(entry)
+            except Exception:
+                pass
         return entry
 
     def run(self) -> Dict[str, Any]:
@@ -391,6 +399,22 @@ class PlaybookRunner:
                 k: self._rv(str(v)) if isinstance(v, str) else v
                 for k, v in params.items()
             }
+
+            # Emitir evento "running" antes de executar o passo
+            if self._on_step_callback:
+                try:
+                    self._on_step_callback({
+                        "step": i + 1,
+                        "type": step_type,
+                        "label": label,
+                        "status": "running",
+                        "output": "",
+                        "error": "",
+                        "duration_ms": 0,
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                except Exception:
+                    pass
 
             step_start = time.time()
             success, output, err = self._execute_step(step_type, resolved_params)
