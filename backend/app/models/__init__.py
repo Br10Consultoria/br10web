@@ -19,6 +19,7 @@ from app.models.blacklist_monitor import SystemApiKey, BlacklistMonitor, Blackli
 from app.models.snmp_monitor import SnmpTarget, SnmpMetric, SnmpAlert, NetconfActionLog
 from app.models.cgnat import CgnatConfig, CgnatMapping
 from app.models.permissions import UserPermission, UserClientScope, MODULES, ACCESS_LEVELS, MODULE_OPERATIONS
+from app.models.vuln_scanner import VulnScan, VulnFinding, ScannerType, ScanStatus, FindingSeverity
 from app.models.playbook import (
     Playbook, PlaybookStep, PlaybookExecution, PlaybookRunStatus,
     AIProviderConfig, AIAnalysis, AIAnalysisStatus, AIProvider,
@@ -52,4 +53,6 @@ __all__ = [
     "CgnatConfig", "CgnatMapping",
     # Permissões granulares
     "UserPermission", "UserClientScope", "MODULES", "ACCESS_LEVELS", "MODULE_OPERATIONS",
+    # Scanner de Vulnerabilidades
+    "VulnScan", "VulnFinding", "ScannerType", "ScanStatus", "FindingSeverity",
 ]

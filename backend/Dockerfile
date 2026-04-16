@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     iptables \
     procps \
+    nmap \
     && ln -snf /usr/share/zoneinfo/America/Bahia /etc/localtime \
     && echo 'America/Bahia' > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*

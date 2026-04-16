@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Network, LayoutDashboard, Server, Shield,
   Users, ClipboardList, Settings, LogOut, X,
-  HardDrive, Building2, Cpu, Terminal, BookOpen, Brain, Map, Wrench, Eye, Database, ShieldCheck, GitMerge, AlertTriangle, Activity
+  HardDrive, Building2, Cpu, Terminal, BookOpen, Brain, Map, Wrench, Eye, Database, ShieldCheck, GitMerge, AlertTriangle, Activity, ShieldAlert
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import toast from 'react-hot-toast'
@@ -28,6 +28,7 @@ const navItems = [
   { to: '/rpki-monitor', icon: ShieldCheck, label: 'Monitor RPKI' },
   { to: '/blacklist-monitor', icon: AlertTriangle, label: 'Blacklist / Reputação' },
   { to: '/snmp-monitor', icon: Activity, label: 'SNMP Monitor' },
+  { to: '/vuln-scanner', icon: ShieldAlert, label: 'Scanner de Vuln.' },
   { to: '/cgnat', icon: GitMerge, label: 'CGNAT' },
 ]
 

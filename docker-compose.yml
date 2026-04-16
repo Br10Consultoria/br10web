@@ -65,6 +65,10 @@ services:
       - ENVIRONMENT=production
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - TZ=America/Bahia
+      - OPENVAS_HOST=${OPENVAS_HOST:-openvas}
+      - OPENVAS_PORT=${OPENVAS_PORT:-9390}
+      - OPENVAS_USER=${OPENVAS_USER:-admin}
+      - OPENVAS_PASSWORD=${OPENVAS_PASSWORD:-admin123}
     volumes:
       - ./backend/app:/app/app  # Hot-reload: git pull + restart atualiza o código sem rebuild
       - backend_backups:/app/backups
@@ -130,6 +134,24 @@ services:
     networks:
       - br10_network
 
+  # ─── OpenVAS / Greenbone Community Edition ──────────────────────────────────
+  # OPCIONAL: Descomente para habilitar o scanner OpenVAS.
+  # Requer ~4GB RAM e ~10GB disco. Primeira inicialização pode levar 30+ minutos.
+  # openvas:
+  #   image: greenbone/community-edition:stable
+  #   container_name: br10_openvas
+  #   restart: unless-stopped
+  #   hostname: openvas
+  #   ports:
+  #     - "9392:9392"   # Interface web Greenbone
+  #   volumes:
+  #     - openvas_data:/var/lib/openvas
+  #     - openvas_db:/var/lib/gvm
+  #   environment:
+  #     - ADMIN_PASSWORD=${OPENVAS_PASSWORD:-admin123}
+  #   networks:
+  #     - br10_network
+
   # ─── Backup Scheduler ──────────────────────────────────────────────────────
   backup-scheduler:
     image: alpine:3.19
@@ -165,6 +187,10 @@ volumes:
     driver: local
   nginx_logs:
     driver: local
+  # openvas_data:
+  #   driver: local
+  # openvas_db:
+  #   driver: local
 
 networks:
   br10_network:
