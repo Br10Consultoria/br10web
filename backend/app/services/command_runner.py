@@ -223,14 +223,37 @@ class CommandRunner:
                 pass
 
     def _wait_for_prompt(self, channel, timeout: int = 10) -> str:
-        """Aguarda um prompt de comando no canal SSH."""
+        """
+        Aguarda um prompt de comando no canal SSH.
+        Trata automaticamente prompts de senha adicionais (AAA/RADIUS Huawei)
+        e prompts de confirmação (Y/N).
+        """
         buffer = b""
         start = time.time()
+        password_sent = False
         while time.time() - start < timeout:
             try:
                 chunk = channel.recv(4096)
                 if chunk:
                     buffer += chunk
+                    tail = buffer[-200:].lower()
+
+                    # Tratar prompt de senha adicional (AAA/RADIUS Huawei)
+                    if not password_sent and (b"password:" in tail or b"senha:" in tail):
+                        if self.password:
+                            channel.send(self.password + "\n")
+                            password_sent = True
+                            time.sleep(0.5)
+                            buffer = b""  # limpar buffer após enviar senha
+                            continue
+
+                    # Tratar prompt de confirmação (Y/N)
+                    if b"[y/n]" in tail or b"(y/n)" in tail:
+                        channel.send("y\n")
+                        time.sleep(0.3)
+                        continue
+
+                    # Verificar se chegou ao prompt pronto
                     if any(buffer.endswith(p) or buffer.endswith(p + b" ") for p in READY_PROMPTS):
                         return buffer.decode("utf-8", errors="replace")
             except Exception:
@@ -250,6 +273,7 @@ class CommandRunner:
                 if chunk:
                     buffer += chunk
                     last_data = time.time()
+                    tail = buffer[-200:].lower()
 
                     # Responder a paginadores automaticamente
                     for pager in PAGER_PROMPTS:
@@ -257,6 +281,13 @@ class CommandRunner:
                             channel.send(" ")  # espaço avança a página
                             time.sleep(0.2)
                             break
+
+                    # Tratar prompt de senha inesperado durante execução
+                    if b"password:" in tail or b"senha:" in tail:
+                        if self.password:
+                            channel.send(self.password + "\n")
+                            time.sleep(0.5)
+                            continue
 
                     # Verificar se chegou ao prompt final
                     stripped = buffer.rstrip()
