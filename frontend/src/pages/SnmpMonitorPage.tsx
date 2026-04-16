@@ -8,6 +8,7 @@ import {
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
+import { useState, useEffect, useRef } from 'react'
 import api from '../utils/api'
 import toast from 'react-hot-toast'
 import { useAuthStore } from '../store/authStore'
@@ -158,9 +159,54 @@ function TargetModal({ target, onClose, onSave }: {
     collect_memory: target?.collect_memory ?? true,
     cpu_threshold: target?.cpu_threshold ?? 80,
     memory_threshold: target?.memory_threshold ?? 85,
+    device_id: target?.device_id || null as string | null,
   })
   const [showCommunity, setShowCommunity] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  // Seletor de dispositivo
+  const [devices, setDevices] = useState<any[]>([])
+  const [deviceSearch, setDeviceSearch] = useState('')
+  const [showDeviceDropdown, setShowDeviceDropdown] = useState(false)
+  const [selectedDeviceName, setSelectedDeviceName] = useState('')
+  const deviceSearchRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    api.get('/devices?limit=500').then(r => {
+      setDevices(r.data || [])
+      // Se estiver editando e tiver device_id, preenche o nome
+      if (target?.device_id) {
+        const dev = (r.data || []).find((d: any) => d.id === target.device_id)
+        if (dev) setSelectedDeviceName(`${dev.name} (${dev.management_ip || dev.hostname || ''})`)
+      }
+    }).catch(() => {})
+  }, [])
+
+  const filteredDevices = deviceSearch.length >= 1
+    ? devices.filter(d =>
+        d.name?.toLowerCase().includes(deviceSearch.toLowerCase()) ||
+        d.management_ip?.includes(deviceSearch) ||
+        d.hostname?.toLowerCase().includes(deviceSearch.toLowerCase())
+      ).slice(0, 10)
+    : devices.slice(0, 10)
+
+  const handleSelectDevice = (dev: any) => {
+    setForm(f => ({
+      ...f,
+      name: f.name || dev.name,
+      host: f.host || dev.management_ip || '',
+      device_id: dev.id,
+    }))
+    setSelectedDeviceName(`${dev.name} (${dev.management_ip || dev.hostname || ''})`)
+    setDeviceSearch('')
+    setShowDeviceDropdown(false)
+  }
+
+  const handleClearDevice = () => {
+    setForm(f => ({ ...f, device_id: null }))
+    setSelectedDeviceName('')
+    setDeviceSearch('')
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -198,6 +244,52 @@ function TargetModal({ target, onClose, onSave }: {
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Seletor de dispositivo cadastrado */}
+          <div>
+            <label className="block text-sm text-dark-400 mb-1">Dispositivo Cadastrado (opcional)</label>
+            {selectedDeviceName ? (
+              <div className="flex items-center gap-2 bg-brand-600/10 border border-brand-500/30 rounded-lg px-3 py-2">
+                <Server className="w-4 h-4 text-brand-400 shrink-0" />
+                <span className="text-sm text-brand-300 flex-1 truncate">{selectedDeviceName}</span>
+                <button type="button" onClick={handleClearDevice} className="text-dark-500 hover:text-dark-300">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="relative" ref={deviceSearchRef}>
+                <input
+                  className="input w-full"
+                  value={deviceSearch}
+                  onChange={e => { setDeviceSearch(e.target.value); setShowDeviceDropdown(true) }}
+                  onFocus={() => setShowDeviceDropdown(true)}
+                  placeholder="Buscar por nome, IP ou hostname..."
+                />
+                {showDeviceDropdown && filteredDevices.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-dark-800 border border-dark-600 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
+                    {filteredDevices.map((dev: any) => (
+                      <button
+                        key={dev.id}
+                        type="button"
+                        onClick={() => handleSelectDevice(dev)}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-dark-700 transition-colors text-left"
+                      >
+                        <div className={`w-2 h-2 rounded-full shrink-0 ${
+                          dev.status === 'online' ? 'bg-green-400' :
+                          dev.status === 'offline' ? 'bg-red-400' : 'bg-slate-400'
+                        }`} />
+                        <div className="min-w-0">
+                          <p className="text-sm text-dark-200 font-medium truncate">{dev.name}</p>
+                          <p className="text-xs text-dark-500 font-mono">{dev.management_ip || dev.hostname || '—'}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-dark-600 mt-1">Selecione um dispositivo para pré-preencher nome e IP automaticamente</p>
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="block text-sm text-dark-400 mb-1">Nome *</label>

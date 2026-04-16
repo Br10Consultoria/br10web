@@ -4,7 +4,7 @@ Background tasks agendados usando APScheduler.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -391,7 +391,7 @@ async def run_snmp_poll_all():
         from app.models.snmp_monitor import SnmpTarget, SnmpMetric, SnmpAlert
         from app.services.snmp_service import poll_target
         from app.core.security import decrypt_field
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -533,6 +533,28 @@ async def run_snmp_poll_all():
         logger.error(f"[Scheduler] Erro no poll SNMP: {e}", exc_info=True)
 
 
+async def cleanup_snmp_metrics():
+    """
+    Task agendada: remove métricas SNMP com mais de 7 dias.
+    Executada diariamente às 03h.
+    """
+    logger.info("[Scheduler] Iniciando limpeza de métricas SNMP antigas (> 7 dias)...")
+    try:
+        from sqlalchemy import delete
+        from app.models.snmp_monitor import SnmpMetric
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                delete(SnmpMetric).where(SnmpMetric.created_at < cutoff)
+            )
+            deleted = result.rowcount
+            await db.commit()
+            logger.info(f"[Scheduler] Limpeza SNMP concluída — {deleted} métricas removidas (anteriores a {cutoff.strftime('%Y-%m-%d %H:%M')} UTC)")
+    except Exception as e:
+        logger.error(f"[Scheduler] Erro na limpeza de métricas SNMP: {e}", exc_info=True)
+
+
 def start_scheduler():
     """Inicia o scheduler com todos os jobs agendados."""
     # Evitar iniciar múltiplas instâncias (problema com uvicorn --workers > 1)
@@ -595,10 +617,21 @@ def start_scheduler():
         misfire_grace_time=120,
     )
 
+    # Limpeza de métricas SNMP antigas (retenção de 7 dias) — diariamente às 03h
+    scheduler.add_job(
+        cleanup_snmp_metrics,
+        trigger=CronTrigger(hour=3, minute=0, timezone="America/Bahia"),
+        id="snmp_metrics_cleanup",
+        name="Limpeza de Métricas SNMP (retenção 7 dias)",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     scheduler.start()
     logger.info(
         "[Scheduler] Iniciado — status a cada 5min, RPKI às 06h/12h/22h, "
-        "Blacklist diariamente às 02h, SNMP poll a cada 5min."
+        "Blacklist diariamente às 02h, SNMP poll a cada 5min, limpeza SNMP às 03h."
     )
 
 

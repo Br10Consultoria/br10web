@@ -292,27 +292,24 @@ export default function DashboardPage() {
           {/* Indicador principal de disponibilidade */}
           <div className="flex items-center gap-6 mb-6">
             <div className="relative w-24 h-24 shrink-0">
-              <svg className="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" strokeWidth="10" />
-                <circle
-                  cx="50" cy="50" r="40" fill="none"
-                  stroke={availability !== null &&
-                    (availability >= 90 ? '#f59e0b' : availability >= 70 ? '#f59e0b' : '#ef4444')}
-                  strokeWidth="10"
-                  strokeDasharray={`${(availability ?? 0) * 2.51} 251`}
-                  strokeLinecap="round"
-                />
-                {/* Camada verde por cima proporcional à disponibilidade */}
-                {availability !== null && availability > 0 && (
-                  <circle
-                    cx="50" cy="50" r="40" fill="none"
-                    stroke={availability >= 95 ? '#22c55e' : availability >= 80 ? '#f59e0b' : '#ef4444'}
-                    strokeWidth="10"
-                    strokeDasharray={`${availability * 2.51} 251`}
-                    strokeLinecap="round"
-                  />
-                )}
-              </svg>
+              {(() => {
+                const ringColor = availability === null ? '#334155'
+                  : availability >= 90 ? '#22c55e'
+                  : availability >= 70 ? '#f59e0b'
+                  : '#ef4444'
+                return (
+                  <svg className="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
+                    <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" strokeWidth="10" />
+                    <circle
+                      cx="50" cy="50" r="40" fill="none"
+                      stroke={ringColor}
+                      strokeWidth="10"
+                      strokeDasharray={`${(availability ?? 0) * 2.51} 251`}
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                )
+              })()}
               <div className="absolute inset-0 flex items-center justify-center">
                 <span className="text-xl font-bold text-white">{availability ?? '—'}%</span>
               </div>
@@ -355,7 +352,11 @@ export default function DashboardPage() {
                   const hasBreakdown = Object.keys(statuses).length > 0
 
                   return (
-                    <div key={typeKey} className="flex items-center gap-2 bg-dark-700/60 rounded-lg px-3 py-2">
+                    <button
+                      key={typeKey}
+                      onClick={() => navigate(`/devices?type=${typeKey}`)}
+                      className="flex items-center gap-2 bg-dark-700/60 hover:bg-dark-600/70 rounded-lg px-3 py-2 transition-colors cursor-pointer"
+                    >
                       <Network className="w-3.5 h-3.5 text-brand-400 shrink-0" />
                       <span className="text-xs text-dark-300 font-medium">{label}</span>
                       {hasBreakdown ? (
@@ -382,7 +383,7 @@ export default function DashboardPage() {
                       ) : (
                         <span className="text-xs font-bold text-white ml-1">{total}</span>
                       )}
-                    </div>
+                    </button>
                   )
                 })}
               </div>
