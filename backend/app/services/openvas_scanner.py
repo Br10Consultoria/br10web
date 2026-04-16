@@ -1,21 +1,28 @@
 """
 BR10 NetManager - OpenVAS/GVM Scanner Service
 Integração com OpenVAS via GVM Python Library (python-gvm).
-Requer container Greenbone Community Edition rodando.
+
+Instalação do OpenVAS: execute scripts/install-openvas.sh no servidor.
+Após instalar, configure no .env do BR10:
+  OPENVAS_HOST=127.0.0.1
+  OPENVAS_PORT=9390
+  OPENVAS_USER=admin
+  OPENVAS_PASSWORD=<sua_senha>
 """
 import asyncio
 import logging
+import os
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Configuração padrão do GVM (pode ser sobrescrita via env)
-GVM_HOST    = "openvas"   # nome do container no docker-compose
-GVM_PORT    = 9390
-GVM_SOCKET  = "/run/gvmd/gvmd.sock"
-GVM_USER    = "admin"
-GVM_PASS    = "admin"
+# Configuração do GVM lida do ambiente
+GVM_HOST   = os.environ.get("OPENVAS_HOST", "127.0.0.1")
+GVM_PORT   = int(os.environ.get("OPENVAS_PORT", "9390"))
+GVM_SOCKET = os.environ.get("GVM_SOCKET", "/run/gvmd/gvmd.sock")
+GVM_USER   = os.environ.get("OPENVAS_USER", "admin")
+GVM_PASS   = os.environ.get("OPENVAS_PASSWORD", "admin123")
 
 # UUIDs padrão do Greenbone Community Edition
 DEFAULT_SCANNER_ID  = "08b69003-5fc2-4037-a479-93b440211c73"  # OpenVAS Default
@@ -45,7 +52,7 @@ async def _get_gvm_connection():
         from gvm.protocols.gmp import Gmp
         from gvm.transforms import EtreeCheckCommandTransform
 
-        # Tentar socket Unix primeiro (mais seguro)
+        # Tentar socket Unix primeiro (mais seguro, se disponível)
         try:
             conn = UnixSocketConnection(path=GVM_SOCKET)
             gmp = Gmp(connection=conn, transform=EtreeCheckCommandTransform())
@@ -54,10 +61,7 @@ async def _get_gvm_connection():
             pass
 
         # Fallback para TCP/TLS
-        import os
-        host = os.environ.get("GVM_HOST", GVM_HOST)
-        port = int(os.environ.get("GVM_PORT", GVM_PORT))
-        conn = TLSConnection(hostname=host, port=port)
+        conn = TLSConnection(hostname=GVM_HOST, port=GVM_PORT)
         gmp = Gmp(connection=conn, transform=EtreeCheckCommandTransform())
         return gmp
 
@@ -70,18 +74,15 @@ async def _get_gvm_connection():
 async def check_openvas_available() -> dict:
     """Verifica se o OpenVAS está disponível e retorna versão."""
     try:
-        import os
         gmp = await _get_gvm_connection()
-        user = os.environ.get("GVM_USER", GVM_USER)
-        pwd  = os.environ.get("GVM_PASS", GVM_PASS)
-
         loop = asyncio.get_event_loop()
 
         def _check():
             with gmp:
-                gmp.authenticate(user, pwd)
+                gmp.authenticate(GVM_USER, GVM_PASS)
                 version = gmp.get_version()
-                return True, version.find("version").text if version.find("version") is not None else "unknown"
+                ver_text = version.find("version").text if version.find("version") is not None else "unknown"
+                return True, ver_text
 
         available, version = await loop.run_in_executor(None, _check)
         return {"available": available, "version": version}
@@ -98,16 +99,12 @@ async def run_openvas_scan(target: str, options: dict) -> dict:
       - scan_config: "full" | "fast" | UUID personalizado
       - timeout_s: int (padrão 3600)
     """
-    import os
     start = time.time()
 
     try:
-        from gvm.protocols.gmp import Gmp
         import xml.etree.ElementTree as ET
 
         gmp = await _get_gvm_connection()
-        user = os.environ.get("GVM_USER", GVM_USER)
-        pwd  = os.environ.get("GVM_PASS", GVM_PASS)
 
         scan_config_key = options.get("scan_config", "full")
         if scan_config_key == "full":
@@ -124,7 +121,7 @@ async def run_openvas_scan(target: str, options: dict) -> dict:
 
         def _run():
             with gmp:
-                gmp.authenticate(user, pwd)
+                gmp.authenticate(GVM_USER, GVM_PASS)
 
                 # Criar alvo
                 target_resp = gmp.create_target(
@@ -182,18 +179,18 @@ async def run_openvas_scan(target: str, options: dict) -> dict:
                 # Parsear resultados
                 findings = []
                 for result in report.findall(".//result"):
-                    host_el   = result.find("host")
-                    host_ip   = host_el.text.strip() if host_el is not None and host_el.text else ""
-                    hostname  = ""
+                    host_el  = result.find("host")
+                    host_ip  = host_el.text.strip() if host_el is not None and host_el.text else ""
+                    hostname = ""
                     if host_el is not None:
                         asset = host_el.find("asset")
                         if asset is not None:
                             hostname = asset.get("name", "")
 
-                    port_el   = result.find("port")
-                    port_str  = port_el.text if port_el is not None else ""
-                    port_num  = None
-                    protocol  = None
+                    port_el  = result.find("port")
+                    port_str = port_el.text if port_el is not None else ""
+                    port_num = None
+                    protocol = None
                     if port_str and "/" in port_str:
                         parts = port_str.split("/")
                         try:
@@ -202,17 +199,16 @@ async def run_openvas_scan(target: str, options: dict) -> dict:
                         except (ValueError, IndexError):
                             pass
 
-                    name_el   = result.find("name")
-                    desc_el   = result.find("description")
-                    nvt_el    = result.find("nvt")
-                    cvss_el   = result.find(".//cvss_base")
-                    sol_el    = result.find(".//solution")
-                    sev_el    = result.find("severity")
+                    name_el  = result.find("name")
+                    desc_el  = result.find("description")
+                    nvt_el   = result.find("nvt")
+                    sol_el   = result.find(".//solution")
+                    sev_el   = result.find("severity")
 
-                    vuln_id   = nvt_el.get("oid") if nvt_el is not None else None
-                    title     = name_el.text if name_el is not None else vuln_id
-                    desc      = desc_el.text if desc_el is not None else None
-                    solution  = sol_el.text if sol_el is not None else None
+                    vuln_id  = nvt_el.get("oid") if nvt_el is not None else None
+                    title    = name_el.text if name_el is not None else vuln_id
+                    desc     = desc_el.text if desc_el is not None else None
+                    solution = sol_el.text if sol_el is not None else None
 
                     try:
                         cvss = float(sev_el.text) if sev_el is not None and sev_el.text else None
@@ -246,7 +242,7 @@ async def run_openvas_scan(target: str, options: dict) -> dict:
                         "extra": {"oid": vuln_id},
                     })
 
-                # Limpar tarefa e alvo
+                # Limpar tarefa e alvo do OpenVAS
                 try:
                     gmp.delete_task(task_id, ultimate=True)
                     gmp.delete_target(target_id, ultimate=True)
