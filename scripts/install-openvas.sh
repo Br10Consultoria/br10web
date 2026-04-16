@@ -1,131 +1,124 @@
-#!/bin/bash
-# =============================================================================
-# BR10 NetManager — Instalação do OpenVAS / Greenbone Community Edition
-# =============================================================================
-# Este script instala o Greenbone Community Edition (OpenVAS) de forma
-# INDEPENDENTE dos containers principais do BR10.
-#
-# O OpenVAS roda em seus próprios containers separados e expõe a API GVM
-# na porta 9390 do host, que o backend BR10 usa para executar varreduras.
-#
-# Uso:
-#   chmod +x scripts/install-openvas.sh
-#   sudo ./scripts/install-openvas.sh
-#
-# Após a instalação, configure o .env do BR10:
-#   OPENVAS_HOST=127.0.0.1
-#   OPENVAS_PORT=9390
-#   OPENVAS_USER=admin
-#   OPENVAS_PASSWORD=<senha definida abaixo>
-# =============================================================================
-
+#!/usr/bin/env bash
+# =============================================================
+#  BR10 NetManager — Instalação do OpenVAS (Greenbone CE)
+#  Usa o registry oficial: registry.community.greenbone.net
+#  Roda completamente separado do BR10 (porta 9392)
+# =============================================================
 set -e
 
-# ─── Configurações ────────────────────────────────────────────────────────────
-OPENVAS_ADMIN_PASSWORD="${OPENVAS_PASSWORD:-Admin@BR10!}"
-OPENVAS_DIR="/opt/openvas-greenbone"
-COMPOSE_FILE="$OPENVAS_DIR/docker-compose.yml"
+INSTALL_DIR="/opt/openvas-greenbone"
+OPENVAS_PASSWORD="${OPENVAS_PASSWORD:-admin123}"
+COMPOSE_PROJECT="greenbone-community-edition"
 
 echo ""
 echo "============================================================"
 echo "  BR10 NetManager — Instalação do OpenVAS (Greenbone CE)"
 echo "============================================================"
 echo ""
-echo "Diretório de instalação: $OPENVAS_DIR"
-echo "Senha do admin OpenVAS:  $OPENVAS_ADMIN_PASSWORD"
+echo "  Diretório de instalação: $INSTALL_DIR"
+echo "  Senha do admin OpenVAS:  $OPENVAS_PASSWORD"
 echo ""
 
-# ─── Verificar dependências ───────────────────────────────────────────────────
-if ! command -v docker &>/dev/null; then
-    echo "[ERRO] Docker não encontrado. Instale o Docker primeiro."
-    exit 1
-fi
+# ── 1. Criar diretório ──────────────────────────────────────
+echo "[1/5] Criando diretório de instalação..."
+mkdir -p "$INSTALL_DIR"
+cd "$INSTALL_DIR"
 
-if ! docker compose version &>/dev/null; then
-    echo "[ERRO] Docker Compose v2 não encontrado."
-    exit 1
-fi
-
-# ─── Criar diretório ──────────────────────────────────────────────────────────
-mkdir -p "$OPENVAS_DIR"
-cd "$OPENVAS_DIR"
-
-# ─── Baixar docker-compose oficial do Greenbone ──────────────────────────────
-echo "[1/4] Baixando configuração oficial do Greenbone Community Edition..."
-curl -fsSL https://greenbone.github.io/docs/latest/_static/setup-and-start-greenbone-community-edition.sh \
-    -o setup-greenbone.sh && chmod +x setup-greenbone.sh
-
-# ─── Criar docker-compose.yml do OpenVAS ─────────────────────────────────────
-echo "[2/4] Criando docker-compose.yml do OpenVAS..."
-cat > "$COMPOSE_FILE" << 'COMPOSE_EOF'
-# Greenbone Community Edition — Docker Compose
-# Independente do BR10 NetManager
-# Porta 9390: GVM API (usada pelo backend BR10)
-# Porta 9392: Interface web Greenbone Security Assistant (GSA)
+# ── 2. Criar docker-compose.yml com imagens corretas ────────
+echo "[2/5] Criando docker-compose.yml do OpenVAS..."
+cat > "$INSTALL_DIR/docker-compose.yml" << 'COMPOSE_EOF'
+name: greenbone-community-edition
 
 services:
   vulnerability-tests:
-    image: greenbone/vulnerability-tests
+    image: registry.community.greenbone.net/community/vulnerability-tests
     environment:
-      STORAGE_PATH: /var/lib/openvas/22.04/vt-data/nasl
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: 1
     volumes:
       - vt_data_vol:/mnt
 
   notus-data:
-    image: greenbone/notus-data
+    image: registry.community.greenbone.net/community/notus-data
+    environment:
+      KEEP_ALIVE: 1
     volumes:
       - notus_data_vol:/mnt
 
   scap-data:
-    image: greenbone/scap-data
+    image: registry.community.greenbone.net/community/scap-data
+    environment:
+      KEEP_ALIVE: 1
     volumes:
       - scap_data_vol:/mnt
 
   cert-bund-data:
-    image: greenbone/cert-bund-data
+    image: registry.community.greenbone.net/community/cert-bund-data
+    environment:
+      KEEP_ALIVE: 1
     volumes:
       - cert_data_vol:/mnt
 
   dfn-cert-data:
-    image: greenbone/dfn-cert-data
+    image: registry.community.greenbone.net/community/dfn-cert-data
+    environment:
+      KEEP_ALIVE: 1
     volumes:
       - cert_data_vol:/mnt
     depends_on:
-      - cert-bund-data
+      cert-bund-data:
+        condition: service_healthy
 
   data-objects:
-    image: greenbone/data-objects
+    image: registry.community.greenbone.net/community/data-objects
+    environment:
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: 1
     volumes:
       - data_objects_vol:/mnt
 
   report-formats:
-    image: greenbone/report-formats
+    image: registry.community.greenbone.net/community/report-formats
+    environment:
+      FEED_RELEASE: "24.10"
+      KEEP_ALIVE: 1
     volumes:
       - data_objects_vol:/mnt
     depends_on:
-      - data-objects
+      data-objects:
+        condition: service_healthy
 
   gpg-data:
-    image: greenbone/gpg-data
+    image: registry.community.greenbone.net/community/gpg-data
     volumes:
       - gpg_data_vol:/mnt
 
   redis-server:
-    image: greenbone/redis-server
-    restart: on-failure
+    image: registry.community.greenbone.net/community/redis-server
+    restart: unless-stopped
     volumes:
       - redis_socket_vol:/run/redis/
 
-  pg-gvm:
-    image: greenbone/pg-gvm:stable
-    restart: on-failure
+  pg-gvm-migrator:
+    image: registry.community.greenbone.net/community/pg-gvm-migrator:stable
+    restart: "no"
     volumes:
       - psql_data_vol:/var/lib/postgresql
       - psql_socket_vol:/var/run/postgresql
 
+  pg-gvm:
+    image: registry.community.greenbone.net/community/pg-gvm:stable
+    restart: unless-stopped
+    volumes:
+      - psql_data_vol:/var/lib/postgresql
+      - psql_socket_vol:/var/run/postgresql
+    depends_on:
+      pg-gvm-migrator:
+        condition: service_completed_successfully
+
   gvmd:
-    image: greenbone/gvmd:stable
-    restart: on-failure
+    image: registry.community.greenbone.net/community/gvmd:stable
+    restart: unless-stopped
     volumes:
       - gvmd_data_vol:/var/lib/gvm
       - scap_data_vol:/var/lib/gvm/scap-data/
@@ -135,28 +128,52 @@ services:
       - psql_data_vol:/var/lib/postgresql
       - gvmd_socket_vol:/run/gvmd
       - ospd_openvas_socket_vol:/run/ospd
-      - notus_data_vol:/var/lib/notus
-      - gpg_data_vol:/etc/openvas/gnupg
       - psql_socket_vol:/var/run/postgresql
     depends_on:
       pg-gvm:
         condition: service_started
+      scap-data:
+        condition: service_healthy
+      cert-bund-data:
+        condition: service_healthy
+      dfn-cert-data:
+        condition: service_healthy
+      data-objects:
+        condition: service_healthy
+      report-formats:
+        condition: service_healthy
 
   gsa:
-    image: greenbone/gsa:stable
-    restart: on-failure
-    ports:
-      - "127.0.0.1:9392:80"
+    image: registry.community.greenbone.net/community/gsa:stable-slim
+    environment:
+      MOUNT_PATH: "/mnt/web"
+      KEEP_ALIVE: 1
+    healthcheck:
+      test: ["CMD-SHELL", "test -e /run/gsa/copying.done"]
+      start_period: 5s
     volumes:
-      - gvmd_socket_vol:/run/gvmd
+      - gsa_data_vol:/mnt/web
+
+  gsad:
+    image: registry.community.greenbone.net/community/gsad:stable
+    restart: unless-stopped
+    ports:
+      - "9392:80"
+    environment:
+      GSAD_ARGS: "--listen=0.0.0.0 --http-only --no-redirect"
+    volumes:
+      - gsa_data_vol:/usr/share/gvm/gsad/web/
+      - gsad_socket_vol:/run/gsad
     depends_on:
-      - gvmd
+      gvmd:
+        condition: service_started
+      gsa:
+        condition: service_healthy
 
   ospd-openvas:
-    image: greenbone/ospd-openvas:stable
-    restart: on-failure
+    image: registry.community.greenbone.net/community/ospd-openvas:stable
+    restart: unless-stopped
     init: true
-    hostname: ospd-openvas
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -177,33 +194,39 @@ services:
       - notus_data_vol:/var/lib/notus
       - ospd_openvas_socket_vol:/run/ospd
       - redis_socket_vol:/run/redis/
+    depends_on:
+      redis-server:
+        condition: service_started
+      gpg-data:
+        condition: service_completed_successfully
+      vulnerability-tests:
+        condition: service_healthy
 
   mqtt-broker:
-    restart: on-failure
-    image: greenbone/mqtt-broker
-    ports:
-      - "127.0.0.1:1883:1883"
-    networks:
-      default:
-        aliases:
-          - mqtt-broker
-          - broker
+    image: registry.community.greenbone.net/community/mqtt-broker
+    restart: unless-stopped
+    volumes:
+      - mqtt_socket_vol:/run/mqtt
 
   notus-scanner:
-    restart: on-failure
-    image: greenbone/notus-scanner:stable
+    image: registry.community.greenbone.net/community/notus-scanner:stable
+    restart: unless-stopped
     volumes:
       - notus_data_vol:/var/lib/notus
       - gpg_data_vol:/etc/openvas/gnupg
     environment:
       NOTUS_SCANNER_MQTT_NAME: notus-scanner
-      NOTUS_SCANNER_DAEMON_MODE: "true"
+      NOTUS_SCANNER_PRODUCTS_DIRECTORY: /var/lib/notus/products
     depends_on:
-      - mqtt-broker
-      - redis-server
+      mqtt-broker:
+        condition: service_started
+      gpg-data:
+        condition: service_completed_successfully
+      notus-data:
+        condition: service_healthy
 
   gvm-tools:
-    image: greenbone/gvm-tools
+    image: registry.community.greenbone.net/community/gvm-tools
     volumes:
       - gvmd_socket_vol:/run/gvmd
       - ospd_openvas_socket_vol:/run/ospd
@@ -221,93 +244,89 @@ volumes:
   vt_data_vol:
   notus_data_vol:
   ospd_openvas_socket_vol:
-  redis_socket_vol:
   gvmd_socket_vol:
   psql_socket_vol:
+  redis_socket_vol:
+  mqtt_socket_vol:
+  gsad_socket_vol:
+  gsa_data_vol:
 COMPOSE_EOF
 
-# ─── Criar script de configuração da senha admin ─────────────────────────────
-cat > "$OPENVAS_DIR/set-admin-password.sh" << SETPWD_EOF
-#!/bin/bash
-# Aguarda o gvmd estar pronto e configura a senha do admin
-echo "Aguardando gvmd inicializar (pode levar até 5 minutos)..."
-for i in \$(seq 1 60); do
-    if docker compose -f "$COMPOSE_FILE" exec -T gvmd gvmd --get-users 2>/dev/null | grep -q admin; then
-        echo "gvmd pronto! Configurando senha do admin..."
-        docker compose -f "$COMPOSE_FILE" exec -T gvmd gvmd --user=admin --new-password="$OPENVAS_ADMIN_PASSWORD"
-        echo ""
-        echo "✅ Senha do admin OpenVAS configurada com sucesso!"
-        echo "   Usuário: admin"
-        echo "   Senha:   $OPENVAS_ADMIN_PASSWORD"
-        echo ""
-        echo "Interface web: http://localhost:9392"
-        echo "API GVM:       localhost:9390"
-        echo ""
-        echo "Configure o .env do BR10:"
-        echo "  OPENVAS_HOST=127.0.0.1"
-        echo "  OPENVAS_PORT=9390"
-        echo "  OPENVAS_USER=admin"
-        echo "  OPENVAS_PASSWORD=$OPENVAS_ADMIN_PASSWORD"
-        exit 0
-    fi
-    echo "  Tentativa \$i/60 — aguardando..."
-    sleep 10
-done
-echo "[AVISO] Timeout aguardando gvmd. Execute manualmente:"
-echo "  docker compose -f $COMPOSE_FILE exec gvmd gvmd --user=admin --new-password='$OPENVAS_ADMIN_PASSWORD'"
-SETPWD_EOF
-chmod +x "$OPENVAS_DIR/set-admin-password.sh"
+# ── 3. Baixar imagens ────────────────────────────────────────
+echo "[3/5] Baixando imagens do Greenbone Community Edition..."
+echo "      (primeira execução baixa ~3-5GB — pode levar vários minutos)"
+docker compose -f "$INSTALL_DIR/docker-compose.yml" -p "$COMPOSE_PROJECT" pull
 
-# ─── Criar script de controle ─────────────────────────────────────────────────
-cat > "$OPENVAS_DIR/openvas-control.sh" << 'CTRL_EOF'
-#!/bin/bash
-COMPOSE_FILE="/opt/openvas-greenbone/docker-compose.yml"
-case "$1" in
-    start)   docker compose -f "$COMPOSE_FILE" up -d ;;
-    stop)    docker compose -f "$COMPOSE_FILE" down ;;
-    status)  docker compose -f "$COMPOSE_FILE" ps ;;
-    logs)    docker compose -f "$COMPOSE_FILE" logs -f --tail=50 ;;
-    restart) docker compose -f "$COMPOSE_FILE" restart ;;
-    *)
-        echo "Uso: $0 {start|stop|status|logs|restart}"
-        exit 1
-        ;;
+# ── 4. Subir containers em background ───────────────────────
+echo "[4/5] Iniciando containers do OpenVAS em background..."
+docker compose -f "$INSTALL_DIR/docker-compose.yml" -p "$COMPOSE_PROJECT" up -d
+
+# ── 5. Aguardar gvmd e criar usuário admin ───────────────────
+echo "[5/5] Aguardando gvmd inicializar (pode levar 2-5 minutos)..."
+CONTAINER_GVMD="${COMPOSE_PROJECT}-gvmd-1"
+TIMEOUT=300
+ELAPSED=0
+while [ $ELAPSED -lt $TIMEOUT ]; do
+    if docker exec "$CONTAINER_GVMD" gvmd --get-users 2>/dev/null | grep -q admin; then
+        echo "      Usuário admin já existe."
+        break
+    fi
+    STATUS=$(docker exec "$CONTAINER_GVMD" gvmd --get-users 2>&1 || true)
+    if echo "$STATUS" | grep -q "admin"; then
+        break
+    fi
+    sleep 10
+    ELAPSED=$((ELAPSED + 10))
+    echo "      Aguardando... ($ELAPSED s)"
+done
+
+# Criar/atualizar senha do admin
+echo "      Configurando senha do admin..."
+docker exec "$CONTAINER_GVMD" gvmd --create-user=admin --password="$OPENVAS_PASSWORD" 2>/dev/null || \
+docker exec "$CONTAINER_GVMD" gvmd --user=admin --new-password="$OPENVAS_PASSWORD" 2>/dev/null || \
+echo "      (Usuário admin já configurado — senha pode precisar ser definida manualmente)"
+
+# ── Criar script de controle ─────────────────────────────────
+cat > /usr/local/bin/openvas-control << CTRL_EOF
+#!/usr/bin/env bash
+INSTALL_DIR="$INSTALL_DIR"
+PROJECT="$COMPOSE_PROJECT"
+CMD="\${1:-status}"
+case "\$CMD" in
+  start)   docker compose -f "\$INSTALL_DIR/docker-compose.yml" -p "\$PROJECT" up -d ;;
+  stop)    docker compose -f "\$INSTALL_DIR/docker-compose.yml" -p "\$PROJECT" stop ;;
+  restart) docker compose -f "\$INSTALL_DIR/docker-compose.yml" -p "\$PROJECT" restart ;;
+  status)  docker compose -f "\$INSTALL_DIR/docker-compose.yml" -p "\$PROJECT" ps ;;
+  logs)    docker compose -f "\$INSTALL_DIR/docker-compose.yml" -p "\$PROJECT" logs -f --tail=50 ;;
+  update)  docker compose -f "\$INSTALL_DIR/docker-compose.yml" -p "\$PROJECT" pull && \
+           docker compose -f "\$INSTALL_DIR/docker-compose.yml" -p "\$PROJECT" up -d ;;
+  *)       echo "Uso: openvas-control {start|stop|restart|status|logs|update}" ;;
 esac
 CTRL_EOF
-chmod +x "$OPENVAS_DIR/openvas-control.sh"
-ln -sf "$OPENVAS_DIR/openvas-control.sh" /usr/local/bin/openvas-control 2>/dev/null || true
-
-# ─── Iniciar containers ───────────────────────────────────────────────────────
-echo "[3/4] Iniciando containers do OpenVAS em background..."
-echo "      (primeira execução baixa ~3-5GB de imagens e dados de CVEs)"
-echo ""
-docker compose -f "$COMPOSE_FILE" up -d
-
-# ─── Configurar senha em background ──────────────────────────────────────────
-echo "[4/4] Configurando senha do admin em background..."
-nohup bash "$OPENVAS_DIR/set-admin-password.sh" > /var/log/openvas-setup.log 2>&1 &
-echo "      Log: tail -f /var/log/openvas-setup.log"
+chmod +x /usr/local/bin/openvas-control
 
 echo ""
 echo "============================================================"
-echo "  OpenVAS instalação iniciada!"
+echo "  OpenVAS instalado com sucesso!"
 echo "============================================================"
 echo ""
-echo "Os containers do OpenVAS estão subindo em background."
-echo "A sincronização inicial de CVEs pode levar 30-60 minutos."
+echo "  Interface web: http://$(hostname -I | awk '{print $1}'):9392"
+echo "  Usuário:       admin"
+echo "  Senha:         $OPENVAS_PASSWORD"
 echo ""
-echo "Comandos úteis:"
-echo "  openvas-control status   — ver status dos containers"
-echo "  openvas-control logs     — ver logs em tempo real"
-echo "  openvas-control stop     — parar OpenVAS"
-echo "  openvas-control start    — iniciar OpenVAS"
+echo "  Comandos de controle:"
+echo "    openvas-control status   — ver status dos containers"
+echo "    openvas-control start    — iniciar OpenVAS"
+echo "    openvas-control stop     — parar OpenVAS"
+echo "    openvas-control logs     — ver logs em tempo real"
+echo "    openvas-control update   — atualizar feeds e imagens"
 echo ""
-echo "Acompanhe a configuração da senha:"
-echo "  tail -f /var/log/openvas-setup.log"
+echo "  IMPORTANTE: Configure o .env do BR10 com:"
+echo "    OPENVAS_HOST=127.0.0.1"
+echo "    OPENVAS_PORT=9390"
+echo "    OPENVAS_USER=admin"
+echo "    OPENVAS_PASSWORD=$OPENVAS_PASSWORD"
 echo ""
-echo "Após concluir, adicione ao .env do BR10 e reinicie o backend:"
-echo "  OPENVAS_HOST=127.0.0.1"
-echo "  OPENVAS_PORT=9390"
-echo "  OPENVAS_USER=admin"
-echo "  OPENVAS_PASSWORD=$OPENVAS_ADMIN_PASSWORD"
+echo "  Depois reinicie o backend:"
+echo "    cd /opt/br10web && docker compose restart backend"
 echo ""
