@@ -463,6 +463,22 @@ async def run_snmp_poll_all():
                             object_name=iface["name"],
                             value_int=iface["oper_status"],
                         ))
+                        if iface.get("in_octets", 0) > 0:
+                            metrics_to_add.append(SnmpMetric(
+                                target_id=target.id,
+                                metric_type="if_in_bps",
+                                object_id=iface["index"],
+                                object_name=iface["name"],
+                                value_int=iface["in_octets"],
+                            ))
+                        if iface.get("out_octets", 0) > 0:
+                            metrics_to_add.append(SnmpMetric(
+                                target_id=target.id,
+                                metric_type="if_out_bps",
+                                object_id=iface["index"],
+                                object_name=iface["name"],
+                                value_int=iface["out_octets"],
+                            ))
 
                     for peer in poll_result.get("bgp", []):
                         metrics_to_add.append(SnmpMetric(

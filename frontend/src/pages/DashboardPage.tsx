@@ -16,7 +16,6 @@ import api from '../utils/api'
 const STATUS_COLORS: Record<string, string> = {
   Online: '#22c55e',
   Offline: '#ef4444',
-  'Manutenção': '#f59e0b',
   Desconhecido: '#64748b',
 }
 
@@ -37,9 +36,19 @@ const DEVICE_TYPE_LABELS: Record<string, string> = {
 const STATUS_CONFIG: Record<string, { color: string; bg: string; dot: string; label: string }> = {
   online: { color: 'text-green-400', bg: 'bg-green-500/10', dot: 'bg-green-400', label: 'Online' },
   offline: { color: 'text-red-400', bg: 'bg-red-500/10', dot: 'bg-red-400', label: 'Offline' },
-  maintenance: { color: 'text-yellow-400', bg: 'bg-yellow-500/10', dot: 'bg-yellow-400', label: 'Manutenção' },
   unknown: { color: 'text-slate-400', bg: 'bg-slate-500/10', dot: 'bg-slate-400', label: 'Desconhecido' },
-  alert: { color: 'text-orange-400', bg: 'bg-orange-500/10', dot: 'bg-orange-400', label: 'Alerta' },
+}
+
+const STATUS_DOT_COLORS: Record<string, string> = {
+  online: 'bg-green-400',
+  offline: 'bg-red-400',
+  unknown: 'bg-slate-400',
+}
+
+const STATUS_TEXT_COLORS: Record<string, string> = {
+  online: 'text-green-400',
+  offline: 'text-red-400',
+  unknown: 'text-slate-400',
 }
 
 function StatCard({ icon: Icon, label, value, color, sub, onClick }: any) {
@@ -103,9 +112,9 @@ export default function DashboardPage() {
       if (data.changes && data.changes.length > 0) {
         data.changes.forEach((change: any) => {
           if (change.new_status === 'online') {
-            toast.success(`✅ ${change.name} voltou a ficar online`, { duration: 5000 })
+            toast.success(`${change.name} voltou a ficar online`, { duration: 5000 })
           } else if (change.new_status === 'offline') {
-            toast.error(`🔴 ${change.name} ficou offline!`, { duration: 8000 })
+            toast.error(`${change.name} ficou offline!`, { duration: 8000 })
           }
         })
       } else {
@@ -120,35 +129,41 @@ export default function DashboardPage() {
     onError: () => toast.error('Erro ao verificar status dos dispositivos'),
   })
 
+  // Pie chart: apenas Online, Offline e Desconhecido (sem Manutenção)
   const pieData = stats ? [
     { name: 'Online', value: stats.online || 0 },
     { name: 'Offline', value: stats.offline || 0 },
-    { name: 'Manutenção', value: stats.maintenance || 0 },
     { name: 'Desconhecido', value: stats.unknown || 0 },
-  ].filter(d => d.value > 0) : []  // cores fixas por nome, não por índice
+  ].filter(d => d.value > 0) : []
 
   // Calcular disponibilidade geral
-  // Considera apenas dispositivos monitorados (online + offline), excluindo manutenção e desconhecidos
+  // Considera apenas dispositivos monitorados (online + offline), excluindo desconhecidos
   const monitoredDevices = stats ? (stats.online || 0) + (stats.offline || 0) : 0
   const availability = stats && monitoredDevices > 0
     ? Math.round((stats.online / monitoredDevices) * 100)
     : null
 
-  // Agrupar dispositivos por tipo — usa stats.by_type para contar TODOS os dispositivos (não só os 10 recentes)
-  const devicesByType: Record<string, number> = {}
-  if (stats?.by_type) {
+  // Agrupar dispositivos por tipo + status usando by_type_status do backend
+  const typeStatusData: { typeKey: string; label: string; statuses: Record<string, number>; total: number }[] = []
+  if (stats?.by_type_status) {
+    Object.entries(stats.by_type_status).forEach(([typeKey, statusCounts]: [string, any]) => {
+      const total = Object.values(statusCounts as Record<string, number>).reduce((a: number, b: number) => a + b, 0)
+      if (total > 0) {
+        const label = DEVICE_TYPE_LABELS[typeKey] || typeKey.replace(/_/g, ' ').toUpperCase()
+        typeStatusData.push({ typeKey, label, statuses: statusCounts, total })
+      }
+    })
+    // Ordenar por total decrescente
+    typeStatusData.sort((a, b) => b.total - a.total)
+  } else if (stats?.by_type) {
+    // Fallback: usar by_type sem breakdown de status
     Object.entries(stats.by_type).forEach(([typeKey, count]) => {
       if ((count as number) > 0) {
         const label = DEVICE_TYPE_LABELS[typeKey] || typeKey.replace(/_/g, ' ').toUpperCase()
-        devicesByType[label] = count as number
+        typeStatusData.push({ typeKey, label, statuses: {}, total: count as number })
       }
     })
-  } else if (devices) {
-    // Fallback: agrupar pelos dispositivos carregados
-    devices.forEach((d: any) => {
-      const label = DEVICE_TYPE_LABELS[d.device_type] || d.device_type || 'Outro'
-      devicesByType[label] = (devicesByType[label] || 0) + 1
-    })
+    typeStatusData.sort((a, b) => b.total - a.total)
   }
 
   return (
@@ -281,11 +296,22 @@ export default function DashboardPage() {
                 <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" strokeWidth="10" />
                 <circle
                   cx="50" cy="50" r="40" fill="none"
-                  stroke={availability !== null && availability >= 90 ? '#22c55e' : availability !== null && availability >= 70 ? '#f59e0b' : '#ef4444'}
+                  stroke={availability !== null &&
+                    (availability >= 90 ? '#f59e0b' : availability >= 70 ? '#f59e0b' : '#ef4444')}
                   strokeWidth="10"
                   strokeDasharray={`${(availability ?? 0) * 2.51} 251`}
                   strokeLinecap="round"
                 />
+                {/* Camada verde por cima proporcional à disponibilidade */}
+                {availability !== null && availability > 0 && (
+                  <circle
+                    cx="50" cy="50" r="40" fill="none"
+                    stroke={availability >= 95 ? '#22c55e' : availability >= 80 ? '#f59e0b' : '#ef4444'}
+                    strokeWidth="10"
+                    strokeDasharray={`${availability * 2.51} 251`}
+                    strokeLinecap="round"
+                  />
+                )}
               </svg>
               <div className="absolute inset-0 flex items-center justify-center">
                 <span className="text-xl font-bold text-white">{availability ?? '—'}%</span>
@@ -297,7 +323,6 @@ export default function DashboardPage() {
                 {[
                   { label: 'Online', count: stats?.online ?? 0, color: 'bg-green-400' },
                   { label: 'Offline', count: stats?.offline ?? 0, color: 'bg-red-400' },
-                  { label: 'Manutenção', count: stats?.maintenance ?? 0, color: 'bg-yellow-400' },
                   { label: 'Desconhecido', count: stats?.unknown ?? 0, color: 'bg-slate-400' },
                 ].map(item => (
                   <div key={item.label} className="flex items-center gap-2">
@@ -318,18 +343,48 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Tipos de dispositivos */}
-          {Object.keys(devicesByType).length > 0 && (
+          {/* Tipos de dispositivos com breakdown por status */}
+          {typeStatusData.length > 0 && (
             <div className="pt-4 border-t border-dark-700">
               <p className="text-xs text-dark-500 uppercase tracking-wider mb-3">Por Tipo de Equipamento</p>
               <div className="flex flex-wrap gap-2">
-                {Object.entries(devicesByType).map(([type, count]) => (
-                  <div key={type} className="flex items-center gap-1.5 bg-dark-700/60 rounded-lg px-3 py-1.5">
-                    <Network className="w-3 h-3 text-brand-400" />
-                    <span className="text-xs text-dark-300">{type}</span>
-                    <span className="text-xs font-bold text-white">{count}</span>
-                  </div>
-                ))}
+                {typeStatusData.map(({ typeKey, label, statuses, total }) => {
+                  const onlineCount = statuses.online || 0
+                  const offlineCount = statuses.offline || 0
+                  const unknownCount = statuses.unknown || 0
+                  const hasBreakdown = Object.keys(statuses).length > 0
+
+                  return (
+                    <div key={typeKey} className="flex items-center gap-2 bg-dark-700/60 rounded-lg px-3 py-2">
+                      <Network className="w-3.5 h-3.5 text-brand-400 shrink-0" />
+                      <span className="text-xs text-dark-300 font-medium">{label}</span>
+                      {hasBreakdown ? (
+                        <div className="flex items-center gap-1.5 ml-1">
+                          {onlineCount > 0 && (
+                            <span className="flex items-center gap-0.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                              <span className="text-xs font-bold text-green-400">{onlineCount}</span>
+                            </span>
+                          )}
+                          {offlineCount > 0 && (
+                            <span className="flex items-center gap-0.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                              <span className="text-xs font-bold text-red-400">{offlineCount}</span>
+                            </span>
+                          )}
+                          {unknownCount > 0 && (
+                            <span className="flex items-center gap-0.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                              <span className="text-xs font-bold text-slate-400">{unknownCount}</span>
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs font-bold text-white ml-1">{total}</span>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

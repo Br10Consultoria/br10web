@@ -8,7 +8,7 @@ Tabelas:
   - snmp_netconf_log: log de ações de gestão via NETCONF/SSH
 """
 from sqlalchemy import (
-    Column, String, Text, Boolean, Integer, Float,
+    Column, String, Text, Boolean, Integer, BigInteger, Float,
     ForeignKey, Index, UniqueConstraint, Enum as SAEnum
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -136,7 +136,7 @@ class SnmpMetric(Base, UUIDMixin, TimestampMixin):
     object_name = Column(String(255), nullable=True)
 
     value_float = Column(Float,   nullable=True)   # métricas numéricas
-    value_int   = Column(Integer, nullable=True)   # contadores, status
+    value_int   = Column(BigInteger, nullable=True)   # contadores, status (BigInt para suportar contadores 64-bit)
     value_str   = Column(String(255), nullable=True)  # strings
 
     # Relacionamentos

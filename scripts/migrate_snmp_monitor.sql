@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS snmp_metrics (
     object_id   VARCHAR(255),
     object_name VARCHAR(255),
     value_float FLOAT,
-    value_int   INTEGER,
+    value_int   BIGINT,
     value_str   VARCHAR(255),
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()

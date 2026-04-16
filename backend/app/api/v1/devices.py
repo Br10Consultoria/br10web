@@ -134,6 +134,22 @@ async def get_device_stats(
         )
         type_counts[dtype.value] = count
 
+    # Por tipo + status (para exibição detalhada na dashboard)
+    type_status_counts = {}
+    for dtype in DeviceType:
+        for dstatus in [DeviceStatus.ONLINE, DeviceStatus.OFFLINE, DeviceStatus.UNKNOWN]:
+            count = await db.scalar(
+                select(func.count(Device.id)).where(
+                    active_filter,
+                    Device.device_type == dtype,
+                    Device.status == dstatus,
+                )
+            )
+            if count and count > 0:
+                if dtype.value not in type_status_counts:
+                    type_status_counts[dtype.value] = {}
+                type_status_counts[dtype.value][dstatus.value] = count
+
     return {
         "total": total,
         "online": online,
@@ -141,6 +157,7 @@ async def get_device_stats(
         "maintenance": maintenance,
         "unknown": unknown,
         "by_type": type_counts,
+        "by_type_status": type_status_counts,
     }
 
 
