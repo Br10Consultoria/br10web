@@ -114,6 +114,12 @@ interface Ipv6Prefix {
   timelines?: any[]
 }
 
+interface Ipv6CheckResult {
+  asn: number
+  total_announced: number
+  checked: Array<{ prefix: string; status: string; roas: RoaEntry[] }>
+}
+
 // ─── Configuração visual por status ───────────────────────────────────────────
 
 const STATUS_CONFIG = {
@@ -687,7 +693,7 @@ interface MonitorCardProps {
   onHistory: () => void
   onIpv6: () => void
   checking: boolean
-  lastCheckResult?: { monitor: Monitor; check: Check } | null
+  lastCheckResult?: { monitor: Monitor; check: Check; ipv6?: Ipv6CheckResult | null } | null
 }
 
 function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, onIpv6, checking, lastCheckResult }: MonitorCardProps) {
@@ -810,10 +816,10 @@ function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, onIpv6, ch
       {/* Detalhes expandidos */}
       {expanded && monitor.last_roas && monitor.last_roas.length > 0 && (
         <div className="border-t border-dark-700 px-4 py-3 bg-dark-900/50">
-          <p className="text-xs font-medium text-dark-400 mb-2">ROAs encontrados</p>
+          <p className="text-xs font-medium text-dark-400 mb-2">ROAs encontrados (IPv4)</p>
           <div className="space-y-1">
             {monitor.last_roas
-              .filter((roa: any) => !roa._hierarchical) // Ignorar marcador interno
+              .filter((roa: any) => !roa._hierarchical)
               .map((roa, i) => (
                 <div key={i} className="flex items-center gap-3 text-xs font-mono">
                   <span className="text-brand-400">AS{roa.asn}</span>
@@ -827,6 +833,32 @@ function MonitorCard({ monitor, onEdit, onDelete, onCheck, onHistory, onIpv6, ch
           </div>
         </div>
       )}
+
+      {/* Resultados IPv6 auto-check */}
+      {expanded && lastCheckResult?.ipv6 && lastCheckResult.ipv6.checked.length > 0 && (
+        <div className="border-t border-dark-700 px-4 py-3 bg-dark-900/50">
+          <p className="text-xs font-medium text-dark-400 mb-2">
+            Prefixos IPv6 — AS{lastCheckResult.ipv6.asn}
+            <span className="ml-2 text-dark-500">({lastCheckResult.ipv6.total_announced} anunciados, exibindo top 5)</span>
+          </p>
+          <div className="space-y-1">
+            {lastCheckResult.ipv6.checked.map((item, i) => {
+              const cfg = getStatus(item.status as any)
+              return (
+                <div key={i} className="flex items-center gap-3 text-xs font-mono">
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
+                  <span className="text-dark-300">{item.prefix}</span>
+                  <span className={cfg.color}>{cfg.label}</span>
+                  {item.roas.length > 0 && (
+                    <span className="text-dark-500">{item.roas.length} ROA(s)</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {expanded && monitor.last_error && (
         <div className="border-t border-dark-700 px-4 py-3 bg-dark-900/50">
           <p className="text-xs text-orange-400">{monitor.last_error}</p>
@@ -860,8 +892,8 @@ export default function RpkiMonitorPage() {
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set())
   const [checkingAll, setCheckingAll] = useState(false)
   const [filterStatus, setFilterStatus] = useState<string>('all')
-  // Armazena o último resultado hierárquico por monitor_id
-  const [lastCheckResults, setLastCheckResults] = useState<Record<string, { monitor: Monitor; check: Check }>>({})
+  // Armazena o último resultado hierárquico por monitor_id (inclui ipv6 auto-check)
+  const [lastCheckResults, setLastCheckResults] = useState<Record<string, { monitor: Monitor; check: Check; ipv6?: Ipv6CheckResult | null }>>({})
 
   // Queries
   const { data: summary, isLoading: summaryLoading } = useQuery<Summary>({
@@ -892,15 +924,14 @@ export default function RpkiMonitorPage() {
     setCheckingIds(s => new Set(s).add(monitor.id))
     try {
       const res = await api.post(`/rpki-monitor/monitors/${monitor.id}/check`, {}, { headers: authHeader })
-      const data = res.data as { monitor: Monitor; check: Check }
+      const data = res.data as { monitor: Monitor; check: Check; ipv6?: Ipv6CheckResult | null }
 
-      // Armazenar resultado hierárquico
-      if (data.check?.hierarchical) {
-        setLastCheckResults(prev => ({ ...prev, [monitor.id]: data }))
-      }
+      // Armazenar resultado (hierárquico + IPv6 auto-check)
+      setLastCheckResults(prev => ({ ...prev, [monitor.id]: data }))
 
       const statusLabel = getStatus(data.check?.status || null).label
-      toast.success(`${monitor.name}: ${statusLabel}`)
+      const ipv6Msg = data.ipv6 ? ` | ${data.ipv6.checked.length} prefixo(s) IPv6 verificado(s)` : ''
+      toast.success(`${monitor.name}: ${statusLabel}${ipv6Msg}`)
       qc.invalidateQueries({ queryKey: ['rpki-monitors'] })
       qc.invalidateQueries({ queryKey: ['rpki-summary'] })
     } catch (e: any) {

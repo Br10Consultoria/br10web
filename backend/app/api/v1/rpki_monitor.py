@@ -536,6 +536,15 @@ async def _check_monitor(
     )
     db.add(check)
 
+    # Auto-salvar ASN descoberto nos ROAs se o monitor não tinha ASN
+    discovered_asn = None
+    if not monitor_asn:
+        origin_asns = result.get("origin_asns", [])
+        if origin_asns:
+            discovered_asn = origin_asns[0]
+            monitor.asn = discovered_asn
+            logger.info(f"[RPKI Monitor] ASN {discovered_asn} descoberto automaticamente para {monitor_prefix}")
+
     # Atualizar o monitor com o último status
     monitor.last_status = status
     monitor.last_checked_at = datetime.now(timezone.utc)
@@ -803,9 +812,39 @@ async def check_monitor_now(
     except Exception:
         monitor_dict = {"id": monitor_id_str, "prefix": monitor_prefix}
 
+    # Verificar prefixos IPv6 automaticamente se o monitor tem ASN
+    ipv6_results = None
+    effective_asn = monitor_dict.get("asn")
+    if effective_asn:
+        try:
+            ipv6_data = await _discover_ipv6_prefixes(effective_asn)
+            ipv6_prefixes = ipv6_data.get("ipv6_prefixes", [])
+            if ipv6_prefixes:
+                # Verificar RPKI dos prefixos IPv6 principais (até 5 blocos maiores)
+                top_prefixes = ipv6_prefixes[:5]
+                ipv6_checks = []
+                for pfx_entry in top_prefixes:
+                    try:
+                        r = await _do_rpki_check(pfx_entry["prefix"], effective_asn)
+                        ipv6_checks.append({
+                            "prefix": pfx_entry["prefix"],
+                            "status": r["rpki_status"],
+                            "roas": r["roas"],
+                        })
+                    except Exception:
+                        ipv6_checks.append({"prefix": pfx_entry["prefix"], "status": "error", "roas": []})
+                ipv6_results = {
+                    "asn": effective_asn,
+                    "total_announced": len(ipv6_prefixes),
+                    "checked": ipv6_checks,
+                }
+        except Exception as e:
+            logger.warning(f"[RPKI] IPv6 auto-check falhou para AS{effective_asn}: {e}")
+
     return {
         "monitor": monitor_dict,
         "check": check_dict,
+        "ipv6": ipv6_results,
     }
 
 

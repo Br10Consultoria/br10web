@@ -44,8 +44,8 @@ class VulnScan(Base, UUIDMixin, TimestampMixin):
 
     name        = Column(String(200), nullable=False)
     target      = Column(String(500), nullable=False)   # IP, range CIDR ou hostname
-    scanner     = Column(SAEnum(ScannerType), nullable=False, default=ScannerType.NMAP)
-    status      = Column(SAEnum(ScanStatus), nullable=False, default=ScanStatus.PENDING)
+    scanner     = Column(SAEnum(ScannerType, values_callable=lambda x: [e.value for e in x]), nullable=False, default=ScannerType.NMAP)
+    status      = Column(SAEnum(ScanStatus, values_callable=lambda x: [e.value for e in x]), nullable=False, default=ScanStatus.PENDING)
 
     # Opções de varredura
     scan_options = Column(JSONB, nullable=True)          # ex: {"ports": "1-1000", "timing": "T4"}
@@ -99,7 +99,7 @@ class VulnFinding(Base, UUIDMixin, TimestampMixin):
     vuln_id     = Column(String(100), nullable=True)    # CVE-XXXX ou OID OpenVAS
     title       = Column(String(500), nullable=True)
     description = Column(Text, nullable=True)
-    severity    = Column(SAEnum(FindingSeverity), nullable=True, default=FindingSeverity.INFO)
+    severity    = Column(SAEnum(FindingSeverity, values_callable=lambda x: [e.value for e in x]), nullable=True, default=FindingSeverity.INFO)
     cvss_score  = Column(Float, nullable=True)
     solution    = Column(Text, nullable=True)
 
