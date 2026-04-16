@@ -153,12 +153,14 @@ async def _get_ssh_credentials(target: SnmpTarget, action: NetconfAction, db: As
 
 @router.get("/targets")
 async def list_targets(
+    device_id: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(SnmpTarget).order_by(SnmpTarget.name)
-    )
+    query = select(SnmpTarget).order_by(SnmpTarget.name)
+    if device_id:
+        query = query.where(SnmpTarget.device_id == UUID(device_id))
+    result = await db.execute(query)
     targets = result.scalars().all()
     return [_target_to_dict(t) for t in targets]
 
@@ -446,7 +448,7 @@ async def get_interfaces(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Retorna o último status de cada interface (último poll)."""
+    """Retorna o último status de cada interface com tráfego e erros (último poll)."""
     target = await _get_target_or_404(target_id, db)
 
     # Pega o último valor de status por interface
@@ -464,19 +466,86 @@ async def get_interfaces(
 
     # Deduplica por object_id (pega o mais recente)
     seen = set()
-    interfaces = []
+    iface_map: dict = {}
     for m in all_metrics:
         if m.object_id not in seen:
             seen.add(m.object_id)
-            interfaces.append({
+            iface_map[m.object_id] = {
                 "index":       m.object_id,
                 "name":        m.object_name,
                 "oper_status": m.value_int,
                 "is_up":       m.value_int == 1,
                 "last_seen":   m.created_at.isoformat() if m.created_at else None,
-            })
+                "in_bps":      None,
+                "out_bps":     None,
+                "in_errors":   None,
+                "out_errors":  None,
+            }
 
-    return interfaces
+    # Busca tráfego (in/out bps) mais recente por interface
+    for metric_type, field in [
+        ("if_in_bps", "in_bps"),
+        ("if_out_bps", "out_bps"),
+        ("if_in_errors", "in_errors"),
+        ("if_out_errors", "out_errors"),
+    ]:
+        traffic_result = await db.execute(
+            select(SnmpMetric)
+            .where(
+                and_(
+                    SnmpMetric.target_id == target.id,
+                    SnmpMetric.metric_type == metric_type,
+                )
+            )
+            .order_by(SnmpMetric.object_id, SnmpMetric.created_at.desc())
+        )
+        traffic_metrics = traffic_result.scalars().all()
+        seen_traffic: set = set()
+        for m in traffic_metrics:
+            if m.object_id and m.object_id not in seen_traffic:
+                seen_traffic.add(m.object_id)
+                if m.object_id in iface_map:
+                    iface_map[m.object_id][field] = m.value_int
+
+    # Busca uptime do target (mais recente)
+    uptime_result = await db.execute(
+        select(SnmpMetric)
+        .where(
+            and_(
+                SnmpMetric.target_id == target.id,
+                SnmpMetric.metric_type == "uptime_seconds",
+            )
+        )
+        .order_by(SnmpMetric.created_at.desc())
+        .limit(1)
+    )
+    uptime_metric = uptime_result.scalar_one_or_none()
+
+    # Busca CPU e memória mais recentes
+    cpu_result = await db.execute(
+        select(SnmpMetric)
+        .where(and_(SnmpMetric.target_id == target.id, SnmpMetric.metric_type == "cpu_usage"))
+        .order_by(SnmpMetric.created_at.desc()).limit(1)
+    )
+    cpu_metric = cpu_result.scalar_one_or_none()
+
+    mem_result = await db.execute(
+        select(SnmpMetric)
+        .where(and_(SnmpMetric.target_id == target.id, SnmpMetric.metric_type == "memory_usage"))
+        .order_by(SnmpMetric.created_at.desc()).limit(1)
+    )
+    mem_metric = mem_result.scalar_one_or_none()
+
+    return {
+        "interfaces": list(iface_map.values()),
+        "uptime_seconds": uptime_metric.value_int if uptime_metric else None,
+        "cpu_pct": cpu_metric.value_float if cpu_metric else None,
+        "mem_pct": mem_metric.value_float if mem_metric else None,
+        "sys_name": target.sys_name,
+        "sys_descr": target.sys_descr,
+        "sys_location": target.sys_location,
+        "sys_contact": target.sys_contact,
+    }
 
 
 @router.get("/targets/{target_id}/bgp")

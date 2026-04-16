@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Activity, Plus, RefreshCw, Trash2, Edit2, Play, ChevronDown, ChevronUp,
   Wifi, WifiOff, AlertTriangle, CheckCircle, Clock, Server, Cpu, MemoryStick,
-  ArrowUpDown, Network, Settings, History, Zap, X, Save, Eye, EyeOff
+  ArrowUpDown, Network, Settings, History, Zap, X, Save, Eye, EyeOff,
+  ArrowDown, ArrowUp, TrendingUp, MapPin, User, Info
 } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -32,6 +33,8 @@ interface SnmpTarget {
   last_error: string | null
   sys_name: string | null
   sys_descr: string | null
+  sys_location: string | null
+  sys_contact: string | null
   device_id: string | null
 }
 
@@ -41,6 +44,21 @@ interface SnmpInterface {
   oper_status: number
   is_up: boolean
   last_seen: string | null
+  in_bps: number | null
+  out_bps: number | null
+  in_errors: number | null
+  out_errors: number | null
+}
+
+interface InterfacesData {
+  interfaces: SnmpInterface[]
+  uptime_seconds: number | null
+  cpu_pct: number | null
+  mem_pct: number | null
+  sys_name: string | null
+  sys_descr: string | null
+  sys_location: string | null
+  sys_contact: string | null
 }
 
 interface BgpSession {
@@ -90,6 +108,15 @@ const formatUptime = (seconds: number): string => {
   if (d > 0) return `${d}d ${h}h ${m}m`
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+const formatBps = (bps: number | null): string => {
+  if (bps === null || bps === undefined) return '—'
+  if (bps === 0) return '0 bps'
+  if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(2)} Gbps`
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2)} Mbps`
+  if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} Kbps`
+  return `${bps} bps`
 }
 
 const formatTimestamp = (ts: string | null): string => {
@@ -279,9 +306,14 @@ function TargetModal({ target, onClose, onSave }: {
 
 // ─── Modal: Ação de Gestão ────────────────────────────────────────────────────
 
-function ActionModal({ target, onClose }: { target: SnmpTarget; onClose: () => void }) {
-  const [actionType, setActionType] = useState('if_enable')
-  const [objectId, setObjectId] = useState('')
+function ActionModal({ target, initialObjectId, initialActionType, onClose }: {
+  target: SnmpTarget
+  initialObjectId?: string
+  initialActionType?: string
+  onClose: () => void
+}) {
+  const [actionType, setActionType] = useState(initialActionType || 'if_enable')
+  const [objectId, setObjectId] = useState(initialObjectId || '')
   const [localAsn, setLocalAsn] = useState('')
   const [remoteAsn, setRemoteAsn] = useState('')
   const [description, setDescription] = useState('')
@@ -435,21 +467,21 @@ function ActionModal({ target, onClose }: { target: SnmpTarget; onClose: () => v
 
 function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: () => void }) {
   const [tab, setTab] = useState<'overview' | 'interfaces' | 'bgp' | 'metrics' | 'alerts' | 'actions' | 'log'>('overview')
-  const [interfaces, setInterfaces] = useState<SnmpInterface[]>([])
+  const [ifaceData, setIfaceData] = useState<InterfacesData | null>(null)
   const [bgpSessions, setBgpSessions] = useState<BgpSession[]>([])
   const [metrics, setMetrics] = useState<MetricPoint[]>([])
   const [alerts, setAlerts] = useState<SnmpAlert[]>([])
   const [actionLog, setActionLog] = useState<unknown[]>([])
   const [loading, setLoading] = useState(false)
   const [polling, setPolling] = useState(false)
-  const [showActionModal, setShowActionModal] = useState(false)
+  const [actionModal, setActionModal] = useState<{ objectId?: string; actionType?: string } | null>(null)
 
   const loadTabData = useCallback(async () => {
     setLoading(true)
     try {
-      if (tab === 'interfaces') {
+      if (tab === 'overview' || tab === 'interfaces') {
         const res = await api.get(`/snmp/targets/${target.id}/interfaces`)
-        setInterfaces(res.data)
+        setIfaceData(res.data)
       } else if (tab === 'bgp') {
         const res = await api.get(`/snmp/targets/${target.id}/bgp`)
         setBgpSessions(res.data)
@@ -522,6 +554,9 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
     { id: 'log', label: 'Log de Ações', icon: History },
   ]
 
+  const upCount = ifaceData?.interfaces.filter(i => i.is_up).length ?? 0
+  const downCount = ifaceData?.interfaces.filter(i => !i.is_up).length ?? 0
+
   return (
     <div className="bg-dark-800 border border-dark-700 rounded-2xl overflow-hidden">
       {/* Header */}
@@ -539,7 +574,7 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
             {polling ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
             Poll Agora
           </button>
-          <button onClick={() => setShowActionModal(true)}
+          <button onClick={() => setActionModal({})}
             className="btn-secondary text-xs flex items-center gap-1.5 py-1.5 text-orange-400 hover:text-orange-300">
             <Zap className="w-3.5 h-3.5" />
             Ação
@@ -568,24 +603,117 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
           </div>
         )}
 
+        {/* ── VISÃO GERAL ── */}
         {!loading && tab === 'overview' && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[
-              { label: 'Último Poll', value: formatTimestamp(target.last_polled_at), icon: Clock },
-              { label: 'Status', value: target.last_status || 'Nunca', icon: target.last_status === 'ok' ? CheckCircle : AlertTriangle, color: statusColor(target.last_status) },
-              { label: 'sysName', value: target.sys_name || '—', icon: Server },
-              { label: 'Localização', value: target.sys_descr?.split(' ').slice(0, 4).join(' ') || '—', icon: Settings },
-            ].map(({ label, value, icon: Icon, color }) => (
-              <div key={label} className="bg-dark-900/50 rounded-xl p-3">
+          <div className="space-y-4">
+            {/* Cards de métricas principais */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-dark-900/50 rounded-xl p-3">
                 <div className="flex items-center gap-2 mb-1">
-                  <Icon className={`w-3.5 h-3.5 ${color || 'text-dark-400'}`} />
-                  <span className="text-xs text-dark-500">{label}</span>
+                  <Clock className="w-3.5 h-3.5 text-brand-400" />
+                  <span className="text-xs text-dark-500">Uptime</span>
                 </div>
-                <p className={`text-sm font-medium truncate ${color || 'text-white'}`}>{value}</p>
+                <p className="text-sm font-medium text-white">
+                  {ifaceData?.uptime_seconds ? formatUptime(ifaceData.uptime_seconds) : '—'}
+                </p>
               </div>
-            ))}
+              <div className="bg-dark-900/50 rounded-xl p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <Cpu className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="text-xs text-dark-500">CPU</span>
+                </div>
+                <p className={`text-sm font-bold ${
+                  ifaceData?.cpu_pct !== null && ifaceData?.cpu_pct !== undefined
+                    ? ifaceData.cpu_pct >= 80 ? 'text-red-400' : ifaceData.cpu_pct >= 60 ? 'text-yellow-400' : 'text-green-400'
+                    : 'text-dark-500'
+                }`}>
+                  {ifaceData?.cpu_pct !== null && ifaceData?.cpu_pct !== undefined ? `${ifaceData.cpu_pct.toFixed(1)}%` : '—'}
+                </p>
+              </div>
+              <div className="bg-dark-900/50 rounded-xl p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <MemoryStick className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="text-xs text-dark-500">Memória</span>
+                </div>
+                <p className={`text-sm font-bold ${
+                  ifaceData?.mem_pct !== null && ifaceData?.mem_pct !== undefined
+                    ? ifaceData.mem_pct >= 85 ? 'text-red-400' : ifaceData.mem_pct >= 70 ? 'text-yellow-400' : 'text-green-400'
+                    : 'text-dark-500'
+                }`}>
+                  {ifaceData?.mem_pct !== null && ifaceData?.mem_pct !== undefined ? `${ifaceData.mem_pct.toFixed(1)}%` : '—'}
+                </p>
+              </div>
+              <div className="bg-dark-900/50 rounded-xl p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <Network className="w-3.5 h-3.5 text-green-400" />
+                  <span className="text-xs text-dark-500">Interfaces</span>
+                </div>
+                <p className="text-sm font-medium text-white">
+                  {ifaceData ? (
+                    <span>
+                      <span className="text-green-400">{upCount} UP</span>
+                      {downCount > 0 && <span className="text-red-400 ml-1">/ {downCount} DOWN</span>}
+                    </span>
+                  ) : '—'}
+                </p>
+              </div>
+            </div>
+
+            {/* Informações do sistema */}
+            <div className="bg-dark-900/50 rounded-xl p-4 space-y-2">
+              <p className="text-xs text-dark-500 uppercase tracking-wider mb-3">Informações do Sistema</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[
+                  { label: 'sysName', value: ifaceData?.sys_name || target.sys_name, icon: Server },
+                  { label: 'sysDescr', value: ifaceData?.sys_descr || target.sys_descr, icon: Info },
+                  { label: 'Localização', value: ifaceData?.sys_location || target.sys_location, icon: MapPin },
+                  { label: 'Contato', value: ifaceData?.sys_contact || target.sys_contact, icon: User },
+                  { label: 'Último Poll', value: formatTimestamp(target.last_polled_at), icon: Clock },
+                  { label: 'Status Poll', value: target.last_status || 'Nunca polled', icon: CheckCircle },
+                ].map(({ label, value, icon: Icon }) => (
+                  <div key={label} className="flex items-start gap-2">
+                    <Icon className="w-3.5 h-3.5 text-dark-500 mt-0.5 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <span className="text-xs text-dark-500">{label}: </span>
+                      <span className="text-xs text-dark-200 break-words">{value || '—'}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Preview das interfaces UP/DOWN */}
+            {ifaceData && ifaceData.interfaces.length > 0 && (
+              <div className="bg-dark-900/50 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs text-dark-500 uppercase tracking-wider">Interfaces (resumo)</p>
+                  <button onClick={() => setTab('interfaces')}
+                    className="text-xs text-brand-400 hover:text-brand-300">
+                    Ver todas →
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5">
+                  {ifaceData.interfaces.slice(0, 12).map(iface => (
+                    <div key={iface.index} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg ${
+                      iface.is_up ? 'bg-green-400/5 border border-green-400/10' : 'bg-red-400/5 border border-red-400/10'
+                    }`}>
+                      {iface.is_up
+                        ? <Wifi className="w-3 h-3 text-green-400 flex-shrink-0" />
+                        : <WifiOff className="w-3 h-3 text-red-400 flex-shrink-0" />}
+                      <span className="text-xs font-mono text-dark-300 truncate">{iface.name}</span>
+                    </div>
+                  ))}
+                  {ifaceData.interfaces.length > 12 && (
+                    <div className="flex items-center justify-center px-2 py-1.5 rounded-lg bg-dark-700/50 text-xs text-dark-400">
+                      +{ifaceData.interfaces.length - 12} mais
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {target.last_error && (
-              <div className="col-span-2 md:col-span-4 bg-red-900/20 border border-red-700/30 rounded-xl p-3">
+              <div className="bg-red-900/20 border border-red-700/30 rounded-xl p-3">
                 <p className="text-xs text-red-400 font-medium mb-1">Último Erro</p>
                 <p className="text-xs text-red-300">{target.last_error}</p>
               </div>
@@ -593,30 +721,117 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
           </div>
         )}
 
+        {/* ── INTERFACES ── */}
         {!loading && tab === 'interfaces' && (
-          <div className="space-y-1">
-            {interfaces.length === 0 ? (
+          <div className="space-y-2">
+            {/* Stats rápidos */}
+            {ifaceData && ifaceData.interfaces.length > 0 && (
+              <div className="flex items-center gap-4 pb-2 border-b border-dark-700 mb-3">
+                <span className="text-xs text-dark-400">
+                  Total: <span className="text-white font-medium">{ifaceData.interfaces.length}</span>
+                </span>
+                <span className="text-xs text-green-400">
+                  UP: <span className="font-medium">{upCount}</span>
+                </span>
+                <span className="text-xs text-red-400">
+                  DOWN: <span className="font-medium">{downCount}</span>
+                </span>
+              </div>
+            )}
+
+            {!ifaceData || ifaceData.interfaces.length === 0 ? (
               <p className="text-center text-dark-500 py-6 text-sm">Nenhuma interface coletada. Execute um poll primeiro.</p>
             ) : (
-              interfaces.map(iface => (
-                <div key={iface.index} className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-dark-700/50">
-                  <div className="flex items-center gap-3">
-                    {iface.is_up
-                      ? <Wifi className="w-4 h-4 text-green-400 flex-shrink-0" />
-                      : <WifiOff className="w-4 h-4 text-red-400 flex-shrink-0" />}
-                    <span className="text-sm text-white font-mono">{iface.name}</span>
-                  </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                    iface.is_up ? 'bg-green-400/10 text-green-400' : 'bg-red-400/10 text-red-400'
-                  }`}>
-                    {iface.is_up ? 'UP' : 'DOWN'}
-                  </span>
+              <div className="space-y-1">
+                {/* Header da tabela */}
+                <div className="grid grid-cols-12 gap-2 px-3 py-1.5 text-xs text-dark-500 uppercase tracking-wider">
+                  <div className="col-span-4">Interface</div>
+                  <div className="col-span-1 text-center">Status</div>
+                  <div className="col-span-2 text-right">In</div>
+                  <div className="col-span-2 text-right">Out</div>
+                  <div className="col-span-1 text-right">Erros</div>
+                  <div className="col-span-2 text-right">Ações</div>
                 </div>
-              ))
+                {ifaceData.interfaces.map(iface => (
+                  <div key={iface.index} className={`grid grid-cols-12 gap-2 items-center py-2 px-3 rounded-lg hover:bg-dark-700/50 transition-colors ${
+                    !iface.is_up ? 'opacity-75' : ''
+                  }`}>
+                    {/* Nome */}
+                    <div className="col-span-4 flex items-center gap-2 min-w-0">
+                      {iface.is_up
+                        ? <Wifi className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />
+                        : <WifiOff className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />}
+                      <span className="text-sm text-white font-mono truncate">{iface.name}</span>
+                    </div>
+                    {/* Status badge */}
+                    <div className="col-span-1 flex justify-center">
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                        iface.is_up ? 'bg-green-400/10 text-green-400' : 'bg-red-400/10 text-red-400'
+                      }`}>
+                        {iface.is_up ? 'UP' : 'DOWN'}
+                      </span>
+                    </div>
+                    {/* Tráfego In */}
+                    <div className="col-span-2 text-right">
+                      {iface.in_bps !== null ? (
+                        <span className="text-xs text-green-300 font-mono flex items-center justify-end gap-0.5">
+                          <ArrowDown className="w-3 h-3" />
+                          {formatBps(iface.in_bps)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-dark-600">—</span>
+                      )}
+                    </div>
+                    {/* Tráfego Out */}
+                    <div className="col-span-2 text-right">
+                      {iface.out_bps !== null ? (
+                        <span className="text-xs text-blue-300 font-mono flex items-center justify-end gap-0.5">
+                          <ArrowUp className="w-3 h-3" />
+                          {formatBps(iface.out_bps)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-dark-600">—</span>
+                      )}
+                    </div>
+                    {/* Erros */}
+                    <div className="col-span-1 text-right">
+                      {(iface.in_errors !== null || iface.out_errors !== null) ? (
+                        <span className={`text-xs font-mono ${
+                          ((iface.in_errors || 0) + (iface.out_errors || 0)) > 0 ? 'text-yellow-400' : 'text-dark-600'
+                        }`}>
+                          {(iface.in_errors || 0) + (iface.out_errors || 0)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-dark-600">—</span>
+                      )}
+                    </div>
+                    {/* Botões de ação rápida */}
+                    <div className="col-span-2 flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => setActionModal({ objectId: iface.name, actionType: iface.is_up ? 'if_disable' : 'if_enable' })}
+                        title={iface.is_up ? 'Desativar interface' : 'Ativar interface'}
+                        className={`p-1 rounded text-xs transition-colors ${
+                          iface.is_up
+                            ? 'text-red-400 hover:bg-red-400/10'
+                            : 'text-green-400 hover:bg-green-400/10'
+                        }`}>
+                        {iface.is_up ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
+                      </button>
+                      <button
+                        onClick={() => setActionModal({ objectId: iface.name })}
+                        title="Outras ações"
+                        className="p-1 rounded text-dark-400 hover:text-orange-400 hover:bg-orange-400/10 transition-colors">
+                        <Zap className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
 
+        {/* ── BGP ── */}
         {!loading && tab === 'bgp' && (
           <div className="space-y-2">
             {bgpSessions.length === 0 ? (
@@ -628,15 +843,26 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
                     <p className="text-sm font-mono text-white">{session.peer_ip}</p>
                     <p className="text-xs text-dark-400">{session.remote_as_str}</p>
                   </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${bgpStateColor(session.state)}`}>
-                    {session.state_name}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${bgpStateColor(session.state)}`}>
+                      {session.state_name}
+                    </span>
+                    {!session.is_established && (
+                      <button
+                        onClick={() => setActionModal({ objectId: session.peer_ip, actionType: 'bgp_enable' })}
+                        title="Ativar peer BGP"
+                        className="p-1 rounded text-green-400 hover:bg-green-400/10 transition-colors">
+                        <Zap className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))
             )}
           </div>
         )}
 
+        {/* ── GRÁFICOS ── */}
         {!loading && tab === 'metrics' && (
           <div className="space-y-4">
             {chartData.length === 0 ? (
@@ -665,6 +891,7 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
           </div>
         )}
 
+        {/* ── ALERTAS ── */}
         {!loading && tab === 'alerts' && (
           <div className="space-y-2">
             {alerts.length === 0 ? (
@@ -693,6 +920,7 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
           </div>
         )}
 
+        {/* ── GESTÃO ── */}
         {!loading && tab === 'actions' && (
           <div className="space-y-3">
             <p className="text-sm text-dark-400">
@@ -706,8 +934,8 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
                 { action: 'bgp_disable', label: 'Desativar Peer BGP', color: 'text-orange-400', desc: 'undo peer enable' },
                 { action: 'bgp_create', label: 'Criar Peer BGP', color: 'text-purple-400', desc: 'peer as-number' },
                 { action: 'bgp_remove', label: 'Remover Peer BGP', color: 'text-red-500', desc: 'undo peer' },
-              ].map(({ label, color, desc }) => (
-                <button key={label} onClick={() => setShowActionModal(true)}
+              ].map(({ action, label, color, desc }) => (
+                <button key={label} onClick={() => setActionModal({ actionType: action })}
                   className="p-3 bg-dark-900/50 rounded-xl text-left hover:bg-dark-700/50 transition-colors">
                   <p className={`text-sm font-medium ${color}`}>{label}</p>
                   <p className="text-xs text-dark-500 font-mono mt-0.5">{desc}</p>
@@ -717,6 +945,7 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
           </div>
         )}
 
+        {/* ── LOG ── */}
         {!loading && tab === 'log' && (
           <div className="space-y-2">
             {(actionLog as Record<string, unknown>[]).length === 0 ? (
@@ -741,8 +970,13 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
         )}
       </div>
 
-      {showActionModal && (
-        <ActionModal target={target} onClose={() => setShowActionModal(false)} />
+      {actionModal !== null && (
+        <ActionModal
+          target={target}
+          initialObjectId={actionModal.objectId}
+          initialActionType={actionModal.actionType}
+          onClose={() => setActionModal(null)}
+        />
       )}
     </div>
   )
@@ -861,10 +1095,13 @@ export default function SnmpMonitorPage() {
                       <span className="text-xs px-1.5 py-0.5 bg-dark-700 text-dark-400 rounded">Inativo</span>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 mt-0.5">
+                  <div className="flex items-center gap-3 mt-0.5 flex-wrap">
                     <span className="text-xs text-dark-400 font-mono">{target.host}:{target.port}</span>
                     {target.sys_name && (
-                      <span className="text-xs text-dark-500">{target.sys_name}</span>
+                      <span className="text-xs text-brand-400 font-medium">{target.sys_name}</span>
+                    )}
+                    {target.sys_descr && (
+                      <span className="text-xs text-dark-500 truncate max-w-xs">{target.sys_descr.split(' ').slice(0, 5).join(' ')}</span>
                     )}
                     <span className="text-xs text-dark-600">
                       Último poll: {formatTimestamp(target.last_polled_at)}

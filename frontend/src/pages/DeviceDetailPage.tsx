@@ -1,14 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Terminal, Shield, Network, Server, Edit2, Trash2,
   Wifi, WifiOff, AlertTriangle, Settings, Upload, Plus, RefreshCw,
   Key, Globe, Layers, GitBranch, Camera, Activity, CheckCircle, Eye, EyeOff,
-  Zap, Clock, Radio
+  Zap, Clock, Radio, Cpu, MemoryStick, ArrowDown, ArrowUp
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { devicesApi, vpnApi, routesApi } from '../utils/api'
+import api from '../utils/api'
 import { useAuthStore } from '../store/authStore'
 import VlanFormModal from '../components/devices/VlanFormModal'
 import PortFormModal from '../components/devices/PortFormModal'
@@ -194,7 +195,7 @@ export default function DeviceDetailPage() {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'info' && <DeviceInfoTab device={device} />}
+      {activeTab === 'info' && <DeviceInfoTab device={device} deviceId={device.id} />}
       {activeTab === 'vlans' && <VlansTab deviceId={device.id} canEdit={canEdit} />}
       {activeTab === 'ports' && <PortsTab deviceId={device.id} canEdit={canEdit} />}
       {activeTab === 'vpn' && <VpnTab deviceId={device.id} canEdit={canEdit} />}
@@ -230,7 +231,7 @@ function InfoRow({ label, value, mono }: { label: string; value?: string | numbe
 }
 
 // ─── DeviceInfoTab ─────────────────────────────────────────────────────────────
-function DeviceInfoTab({ device }: { device: any }) {
+function DeviceInfoTab({ device, deviceId }: { device: any; deviceId: string }) {
   // Protocolos habilitados para exibição
   const protocols = []
   if (device.ssh_port) protocols.push({ label: 'SSH', port: device.ssh_port })
@@ -284,6 +285,9 @@ function DeviceInfoTab({ device }: { device: any }) {
 
       {/* Monitoramento — sempre visível */}
       <MonitoringCard device={device} />
+
+      {/* Dados SNMP coletados */}
+      <SnmpDataCard deviceId={deviceId} />
 
       {/* Observações */}
       {device.notes && (
@@ -465,6 +469,179 @@ function MonitoringCard({ device }: { device: any }) {
       <p className="text-xs text-dark-600 mt-4">
         Verificação automática a cada 5 minutos via TCP nas portas configuradas.
       </p>
+    </div>
+  )
+}
+
+// ─── SnmpDataCard ─────────────────────────────────────────────────────────────
+function SnmpDataCard({ deviceId }: { deviceId: string }) {
+  const [snmpTarget, setSnmpTarget] = useState<any>(null)
+  const [ifaceData, setIfaceData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      try {
+        const targetsRes = await api.get(`/snmp/targets?device_id=${deviceId}`)
+        const targets = targetsRes.data
+        if (targets.length > 0) {
+          const target = targets[0]
+          setSnmpTarget(target)
+          const ifaceRes = await api.get(`/snmp/targets/${target.id}/interfaces`)
+          setIfaceData(ifaceRes.data)
+        }
+      } catch { /* sem SNMP configurado */ }
+      finally { setLoading(false) }
+    }
+    load()
+  }, [deviceId])
+
+  const formatBps = (bps: number | null): string => {
+    if (bps === null || bps === undefined) return '—'
+    if (bps === 0) return '0 bps'
+    if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(2)} Gbps`
+    if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2)} Mbps`
+    if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} Kbps`
+    return `${bps} bps`
+  }
+
+  const formatUptime = (seconds: number): string => {
+    const d = Math.floor(seconds / 86400)
+    const h = Math.floor((seconds % 86400) / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    if (d > 0) return `${d}d ${h}h ${m}m`
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m`
+  }
+
+  if (loading) {
+    return (
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Activity className="w-4 h-4 text-brand-400" />
+          <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider">Dados SNMP</h3>
+        </div>
+        <div className="flex items-center justify-center py-6">
+          <RefreshCw className="w-5 h-5 animate-spin text-brand-400" />
+        </div>
+      </div>
+    )
+  }
+
+  if (!snmpTarget) {
+    return (
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Activity className="w-4 h-4 text-dark-500" />
+          <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider">Dados SNMP</h3>
+        </div>
+        <p className="text-sm text-dark-500 italic">
+          Nenhum target SNMP vinculado a este dispositivo. Cadastre um target no SNMP Monitor e vincule ao dispositivo.
+        </p>
+      </div>
+    )
+  }
+
+  const upInterfaces = ifaceData?.interfaces?.filter((i: any) => i.is_up) || []
+  const downInterfaces = ifaceData?.interfaces?.filter((i: any) => !i.is_up) || []
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Activity className="w-4 h-4 text-brand-400" />
+          <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider">Dados SNMP</h3>
+        </div>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+          snmpTarget.last_status === 'ok' ? 'bg-green-400/10 text-green-400' :
+          snmpTarget.last_status === 'error' ? 'bg-red-400/10 text-red-400' :
+          'bg-dark-700 text-dark-400'
+        }`}>
+          {snmpTarget.last_status === 'ok' ? 'OK' : snmpTarget.last_status === 'error' ? 'Erro' : 'Nunca polled'}
+        </span>
+      </div>
+
+      {/* Info do sistema via SNMP */}
+      <div className="space-y-1 mb-4">
+        {ifaceData?.sys_name && <InfoRow label="sysName" value={ifaceData.sys_name} />}
+        {ifaceData?.sys_descr && <InfoRow label="sysDescr" value={ifaceData.sys_descr.split(' ').slice(0, 8).join(' ')} />}
+        {ifaceData?.sys_location && <InfoRow label="Localização (SNMP)" value={ifaceData.sys_location} />}
+        {ifaceData?.sys_contact && <InfoRow label="Contato (SNMP)" value={ifaceData.sys_contact} />}
+        {ifaceData?.uptime_seconds && <InfoRow label="Uptime" value={formatUptime(ifaceData.uptime_seconds)} />}
+      </div>
+
+      {/* CPU e Memória */}
+      {(ifaceData?.cpu_pct !== null && ifaceData?.cpu_pct !== undefined) && (
+        <div className="mb-2">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-dark-400 flex items-center gap-1"><Cpu className="w-3 h-3" /> CPU</span>
+            <span className="text-dark-300 font-mono">{ifaceData.cpu_pct.toFixed(1)}%</span>
+          </div>
+          <div className="w-full bg-dark-700 rounded-full h-1.5">
+            <div className={`h-1.5 rounded-full transition-all ${
+              ifaceData.cpu_pct > 80 ? 'bg-red-500' : ifaceData.cpu_pct > 60 ? 'bg-yellow-500' : 'bg-green-500'
+            }`} style={{ width: `${Math.min(ifaceData.cpu_pct, 100)}%` }} />
+          </div>
+        </div>
+      )}
+      {(ifaceData?.mem_pct !== null && ifaceData?.mem_pct !== undefined) && (
+        <div className="mb-4">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-dark-400 flex items-center gap-1"><MemoryStick className="w-3 h-3" /> Memória</span>
+            <span className="text-dark-300 font-mono">{ifaceData.mem_pct.toFixed(1)}%</span>
+          </div>
+          <div className="w-full bg-dark-700 rounded-full h-1.5">
+            <div className={`h-1.5 rounded-full transition-all ${
+              ifaceData.mem_pct > 85 ? 'bg-red-500' : ifaceData.mem_pct > 70 ? 'bg-yellow-500' : 'bg-blue-500'
+            }`} style={{ width: `${Math.min(ifaceData.mem_pct, 100)}%` }} />
+          </div>
+        </div>
+      )}
+
+      {/* Interfaces */}
+      {ifaceData?.interfaces && ifaceData.interfaces.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-dark-500 uppercase tracking-wider">Interfaces</p>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="text-green-400">{upInterfaces.length} UP</span>
+              {downInterfaces.length > 0 && <span className="text-red-400">{downInterfaces.length} DOWN</span>}
+            </div>
+          </div>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {ifaceData.interfaces.map((iface: any) => (
+              <div key={iface.index} className={`flex items-center justify-between py-1.5 px-2 rounded-lg ${
+                iface.is_up ? 'hover:bg-dark-700/30' : 'opacity-60 hover:bg-dark-700/30'
+              }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  {iface.is_up
+                    ? <Wifi className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />
+                    : <WifiOff className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />}
+                  <span className="text-xs font-mono text-dark-300 truncate">{iface.name}</span>
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  {iface.in_bps !== null && (
+                    <span className="text-xs text-green-300 font-mono flex items-center gap-0.5">
+                      <ArrowDown className="w-2.5 h-2.5" />{formatBps(iface.in_bps)}
+                    </span>
+                  )}
+                  {iface.out_bps !== null && (
+                    <span className="text-xs text-blue-300 font-mono flex items-center gap-0.5">
+                      <ArrowUp className="w-2.5 h-2.5" />{formatBps(iface.out_bps)}
+                    </span>
+                  )}
+                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                    iface.is_up ? 'bg-green-400/10 text-green-400' : 'bg-red-400/10 text-red-400'
+                  }`}>
+                    {iface.is_up ? 'UP' : 'DOWN'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
