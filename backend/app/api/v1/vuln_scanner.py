@@ -19,7 +19,7 @@ from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.user import User
 from app.models.vuln_scanner import VulnScan, VulnFinding, ScannerType, ScanStatus, FindingSeverity
-from app.services.nmap_scanner import run_nmap_scan
+from app.services.nmap_scanner import run_nmap_scan, SCAN_TYPES
 from app.services.openvas_scanner import run_openvas_scan, check_openvas_available
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/vuln-scanner", tags=["Vulnerability Scanner"])
 
 
-# ─── Schemas ──────────────────────────────────────────────────────────────────
+# ─── Scan Types ──────────────────────────────────────────────
+
+@router.get("/scan-types", summary="Listar tipos de scan Nmap disponíveis")
+async def list_scan_types(current_user: User = Depends(get_current_user)):
+    """Retorna todos os tipos de scan Nmap com label e descrição."""
+    return [
+        {"value": k, "label": v["label"], "description": v["description"]}
+        for k, v in SCAN_TYPES.items()
+    ]
+
+
+# ─── Schemas ──────────────────────────────────────────────
 
 class StartScanRequest(BaseModel):
     name: str

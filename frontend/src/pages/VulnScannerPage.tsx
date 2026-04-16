@@ -93,11 +93,28 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   })
   const [loading, setLoading] = useState(false)
   const [openvasAvailable, setOpenvasAvailable] = useState<boolean | null>(null)
+  const [scanTypes, setScanTypes] = useState<{value: string; label: string; description: string}[]>([])
 
   useEffect(() => {
     api.get('/vuln-scanner/openvas/status')
       .then(r => setOpenvasAvailable(r.data.available))
       .catch(() => setOpenvasAvailable(false))
+    api.get('/vuln-scanner/scan-types')
+      .then(r => setScanTypes(r.data))
+      .catch(() => setScanTypes([
+        { value: 'quick', label: 'Rápido (portas comuns)', description: 'Varredura rápida nas 100 portas mais comuns' },
+        { value: 'full',  label: 'Completo (todas as portas)', description: 'Todas as 65535 portas TCP' },
+        { value: 'vuln',  label: 'Vulnerabilidades (NSE vuln)', description: 'Scripts NSE de vulnerabilidades' },
+        { value: 'syn',   label: 'SYN Scan (TCP stealth)', description: 'Varredura TCP SYN furtiva' },
+        { value: 'udp',   label: 'UDP Scan', description: 'Varredura de portas UDP' },
+        { value: 'arp',   label: 'ARP Scan (descoberta de rede)', description: 'Descoberta de hosts via ARP' },
+        { value: 'os',    label: 'Detecção de SO e Serviços', description: 'Identifica sistema operacional e versões' },
+        { value: 'snmp',  label: 'SNMP Discovery', description: 'Varredura UDP 161 com scripts SNMP' },
+        { value: 'http',  label: 'HTTP/HTTPS (portas web)', description: 'Varredura nas portas web com scripts HTTP' },
+        { value: 'ssh',   label: 'SSH Audit', description: 'Auditoria SSH: algoritmos, versão' },
+        { value: 'smb',   label: 'SMB/Windows', description: 'Varredura SMB com scripts Windows' },
+        { value: 'custom',label: 'Personalizado', description: 'Defina portas e opções manualmente' },
+      ]))
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -201,18 +218,22 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
               <p className="text-xs text-gray-400 font-medium">Opções Nmap</p>
 
               <div className="grid grid-cols-2 gap-3">
-                <div>
+                <div className="col-span-2">
                   <label className="block text-xs text-gray-400 mb-1">Tipo de Varredura</label>
                   <select
                     value={form.scan_type}
                     onChange={e => setForm(f => ({ ...f, scan_type: e.target.value }))}
                     className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-white text-sm"
                   >
-                    <option value="quick">Rápida (top 100 portas)</option>
-                    <option value="full">Completa (todas as portas)</option>
-                    <option value="vuln">Vulnerabilidades (NSE vuln)</option>
-                    <option value="custom">Personalizada</option>
+                    {scanTypes.map(st => (
+                      <option key={st.value} value={st.value}>{st.label}</option>
+                    ))}
                   </select>
+                  {scanTypes.find(st => st.value === form.scan_type) && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      {scanTypes.find(st => st.value === form.scan_type)?.description}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Velocidade</label>

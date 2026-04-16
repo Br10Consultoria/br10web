@@ -135,22 +135,23 @@ services:
       - br10_network
 
   # ─── OpenVAS / Greenbone Community Edition ──────────────────────────────────
-  # OPCIONAL: Descomente para habilitar o scanner OpenVAS.
-  # Requer ~4GB RAM e ~10GB disco. Primeira inicialização pode levar 30+ minutos.
-  # openvas:
-  #   image: greenbone/community-edition:stable
-  #   container_name: br10_openvas
-  #   restart: unless-stopped
-  #   hostname: openvas
-  #   ports:
-  #     - "9392:9392"   # Interface web Greenbone
-  #   volumes:
-  #     - openvas_data:/var/lib/openvas
-  #     - openvas_db:/var/lib/gvm
-  #   environment:
-  #     - ADMIN_PASSWORD=${OPENVAS_PASSWORD:-admin123}
-  #   networks:
-  #     - br10_network
+  # Ativo mas independente: execute scans apenas quando necessário pela interface.
+  # Primeira inicialização pode levar 30-60 min (download da base de CVEs ~3GB).
+  openvas:
+    image: greenbone/community-edition:stable
+    container_name: br10_openvas
+    restart: unless-stopped
+    hostname: openvas
+    ports:
+      - "127.0.0.1:9392:9392"   # Interface web Greenbone (acesso local)
+      - "127.0.0.1:9390:9390"   # GVM API (usada pelo backend)
+    volumes:
+      - openvas_data:/var/lib/openvas
+      - openvas_db:/var/lib/gvm
+    environment:
+      - ADMIN_PASSWORD=${OPENVAS_PASSWORD:-admin123}
+    networks:
+      - br10_network
 
   # ─── Backup Scheduler ──────────────────────────────────────────────────────
   backup-scheduler:
@@ -187,10 +188,10 @@ volumes:
     driver: local
   nginx_logs:
     driver: local
-  # openvas_data:
-  #   driver: local
-  # openvas_db:
-  #   driver: local
+  openvas_data:
+    driver: local
+  openvas_db:
+    driver: local
 
 networks:
   br10_network:

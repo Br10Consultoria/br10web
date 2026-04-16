@@ -59,12 +59,29 @@ def _abbreviate_iface(name: str) -> str:
     return name
 
 
+# Tipos de scan disponíveis com descrição para o frontend
+SCAN_TYPES = {
+    "quick":        {"label": "Rápido (portas comuns)",           "description": "Varredura rápida nas 100 portas mais comuns (-F)"},
+    "full":         {"label": "Completo (todas as portas)",        "description": "Todas as 65535 portas TCP com detecção de serviços"},
+    "vuln":         {"label": "Vulnerabilidades (NSE vuln)",       "description": "Scripts NSE de vulnerabilidades nas portas 1-10000"},
+    "syn":          {"label": "SYN Scan (TCP stealth)",            "description": "Varredura TCP SYN furtiva, não completa o handshake"},
+    "udp":          {"label": "UDP Scan",                          "description": "Varredura de portas UDP (mais lento)"},
+    "arp":          {"label": "ARP Scan (descoberta de rede)",     "description": "Descoberta de hosts ativos via ARP na rede local"},
+    "os":           {"label": "Detecção de SO e Serviços",         "description": "Identifica sistema operacional, versões e scripts padrão"},
+    "snmp":         {"label": "SNMP Discovery",                    "description": "Varredura UDP 161 com scripts SNMP (community, interfaces)"},
+    "http":         {"label": "HTTP/HTTPS (portas web)",           "description": "Varredura nas portas 80,443,8080,8443 com scripts HTTP"},
+    "ssh":          {"label": "SSH Audit",                         "description": "Auditoria SSH: algoritmos, versão, configurações"},
+    "smb":          {"label": "SMB/Windows",                       "description": "Varredura SMB com scripts de vulnerabilidades Windows"},
+    "custom":       {"label": "Personalizado",                     "description": "Defina portas e opções manualmente"},
+}
+
+
 def build_nmap_command(target: str, options: dict) -> list[str]:
     """
     Monta o comando Nmap com base nas opções fornecidas.
 
     Opções suportadas:
-      - scan_type: "quick" | "full" | "vuln" | "custom"
+      - scan_type: ver SCAN_TYPES acima
       - ports: "22,80,443" | "1-1000" | "all"
       - timing: "T1" .. "T5" (padrão T4)
       - os_detection: bool
@@ -79,25 +96,84 @@ def build_nmap_command(target: str, options: dict) -> list[str]:
     ports     = options.get("ports", "")
 
     if scan_type == "quick":
+        # Varredura rápida nas 100 portas mais comuns
         cmd += [f"-{timing}", "-sV", "--open", "-F"]
+
     elif scan_type == "full":
+        # Todas as portas TCP
         cmd += [f"-{timing}", "-sV", "-sC", "-p-", "--open"]
+
     elif scan_type == "vuln":
+        # Scripts NSE de vulnerabilidades
         cmd += [f"-{timing}", "-sV", "--script=vuln", "--open"]
         if not ports:
             ports = "1-10000"
+
+    elif scan_type == "syn":
+        # TCP SYN scan (stealth)
+        cmd += [f"-{timing}", "-sS", "-sV", "-O", "--open"]
+        if not ports:
+            ports = "1-10000"
+
+    elif scan_type == "udp":
+        # UDP scan
+        cmd += [f"-{timing}", "-sU", "--open"]
+        if not ports:
+            ports = "53,67,68,69,123,161,162,500,514,1194"
+
+    elif scan_type == "arp":
+        # ARP scan para descoberta de hosts na rede local
+        cmd += ["-sn", "-PR"]
+
+    elif scan_type == "os":
+        # Detecção de SO + serviços + scripts padrão
+        cmd += [f"-{timing}", "-sS", "-sV", "-O", "-sC", "--osscan-guess", "--open"]
+        if not ports:
+            ports = "1-10000"
+
+    elif scan_type == "snmp":
+        # SNMP discovery via UDP 161
+        cmd += [f"-{timing}", "-sU", "-p161",
+                "--script=snmp-info,snmp-interfaces,snmp-sysdescr,snmp-processes"]
+
+    elif scan_type == "http":
+        # Varredura HTTP/HTTPS com scripts web
+        cmd += [f"-{timing}", "-sV",
+                "--script=http-title,http-headers,http-methods,http-auth-finder,http-vuln-cve2017-5638",
+                "--open"]
+        if not ports:
+            ports = "80,443,8080,8443,8888,3000,4443"
+
+    elif scan_type == "ssh":
+        # Auditoria SSH
+        cmd += [f"-{timing}", "-sV",
+                "--script=ssh2-enum-algos,ssh-auth-methods,ssh-hostkey",
+                "--open"]
+        if not ports:
+            ports = "22,2222"
+
+    elif scan_type == "smb":
+        # SMB / Windows vulnerabilities
+        cmd += [f"-{timing}", "-sV",
+                "--script=smb-vuln-ms17-010,smb-vuln-ms08-067,smb-security-mode,smb-os-discovery",
+                "--open"]
+        if not ports:
+            ports = "445,139,135"
+
     elif scan_type == "custom":
         cmd += [f"-{timing}", "-sV", "--open"]
+
     else:
         cmd += [f"-{timing}", "-sV", "--open", "-F"]
 
+    # Portas (sobrescreve o padrão do scan_type se informado)
     if ports:
         if ports == "all":
             cmd += ["-p-"]
         else:
             cmd += [f"-p{ports}"]
 
-    if options.get("os_detection"):
+    if options.get("os_detection") and "-O" not in cmd:
         cmd += ["-O", "--osscan-guess"]
 
     if options.get("service_version", True):
