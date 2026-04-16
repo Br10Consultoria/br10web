@@ -1,14 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Activity, Plus, RefreshCw, Trash2, Edit2, Play, ChevronDown, ChevronUp,
   Wifi, WifiOff, AlertTriangle, CheckCircle, Clock, Server, Cpu, MemoryStick,
   ArrowUpDown, Network, Settings, History, Zap, X, Save, Eye, EyeOff,
-  ArrowDown, ArrowUp, TrendingUp, MapPin, User, Info
+  ArrowDown, ArrowUp, TrendingUp, MapPin, User, Info, Users
 } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
-import { useState, useEffect, useRef } from 'react'
 import api from '../utils/api'
 import toast from 'react-hot-toast'
 import { useAuthStore } from '../store/authStore'
@@ -555,6 +554,159 @@ function ActionModal({ target, initialObjectId, initialActionType, onClose }: {
   )
 }
 
+// ─── Modal: Consulta PPPoE ───────────────────────────────────────────────────
+
+function PppoeModal({ target, interfaceName, onClose }: {
+  target: SnmpTarget
+  interfaceName: string
+  onClose: () => void
+}) {
+  const [mode, setMode] = useState<'menu' | 'count' | 'list' | 'username'>('menu')
+  const [username, setUsername] = useState('')
+  const [slot, setSlot] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [results, setResults] = useState<{ command: string; output: string; success: boolean }[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  const runQuery = async (queryMode: 'count' | 'list' | 'username') => {
+    setLoading(true)
+    setError(null)
+    setResults([])
+    setMode(queryMode)
+    try {
+      const payload: Record<string, unknown> = { slot }
+      if (queryMode === 'username') {
+        if (!username.trim()) { setError('Informe o username do cliente.'); setLoading(false); return }
+        payload.username = username.trim()
+      } else {
+        payload.interface = interfaceName
+      }
+      const res = await api.post(`/snmp/targets/${target.id}/pppoe-query`, payload)
+      // Para mode=count, mostrar apenas o primeiro resultado; para list, mostrar o segundo
+      if (queryMode === 'count') {
+        setResults([res.data.results[0]])
+      } else if (queryMode === 'list') {
+        setResults([res.data.results[1] || res.data.results[0]])
+      } else {
+        setResults(res.data.results)
+      }
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } } }
+      setError(e?.response?.data?.detail || 'Erro ao executar consulta PPPoE')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-dark-800 border border-dark-700 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-dark-700 shrink-0">
+          <div>
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Users className="w-5 h-5 text-blue-400" />
+              Consulta PPPoE
+            </h2>
+            <p className="text-xs text-dark-400 font-mono mt-0.5">{interfaceName}</p>
+          </div>
+          <button onClick={onClose} className="btn-ghost p-1.5 rounded-lg">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">
+          {/* Slot selector */}
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-dark-400">Slot:</label>
+            <input
+              type="number" min={0} max={20}
+              value={slot}
+              onChange={e => setSlot(parseInt(e.target.value) || 0)}
+              className="input w-20 text-center"
+            />
+          </div>
+
+          {/* Botões de consulta por interface */}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => runQuery('count')}
+              disabled={loading}
+              className="flex flex-col items-center gap-2 p-4 bg-dark-700/60 hover:bg-dark-600/70 border border-dark-600 hover:border-blue-500/40 rounded-xl transition-colors">
+              <Activity className="w-6 h-6 text-blue-400" />
+              <div className="text-center">
+                <p className="text-sm font-medium text-white">Total de PPPoE</p>
+                <p className="text-xs text-dark-400">Contagem de sessões na interface</p>
+              </div>
+            </button>
+            <button
+              onClick={() => runQuery('list')}
+              disabled={loading}
+              className="flex flex-col items-center gap-2 p-4 bg-dark-700/60 hover:bg-dark-600/70 border border-dark-600 hover:border-green-500/40 rounded-xl transition-colors">
+              <Users className="w-6 h-6 text-green-400" />
+              <div className="text-center">
+                <p className="text-sm font-medium text-white">Listar PPPoE Online</p>
+                <p className="text-xs text-dark-400">Todos os usuários ativos</p>
+              </div>
+            </button>
+          </div>
+
+          {/* Consulta por username */}
+          <div className="border-t border-dark-700 pt-4">
+            <p className="text-sm font-medium text-dark-300 mb-2">Consultar por Usuário</p>
+            <div className="flex gap-2">
+              <input
+                className="input flex-1"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && runQuery('username')}
+                placeholder="Login do cliente (ex: cliente123)"
+              />
+              <button
+                onClick={() => runQuery('username')}
+                disabled={loading || !username.trim()}
+                className="btn-primary flex items-center gap-2">
+                {loading && mode === 'username' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <User className="w-4 h-4" />}
+                Consultar
+              </button>
+            </div>
+          </div>
+
+          {/* Loading */}
+          {loading && (
+            <div className="flex items-center justify-center py-6 gap-3">
+              <RefreshCw className="w-5 h-5 text-blue-400 animate-spin" />
+              <span className="text-sm text-dark-400">Executando consulta no roteador...</span>
+            </div>
+          )}
+
+          {/* Erro */}
+          {error && (
+            <div className="bg-red-400/10 border border-red-400/20 rounded-lg p-3">
+              <p className="text-sm text-red-400">{error}</p>
+            </div>
+          )}
+
+          {/* Resultados */}
+          {results.length > 0 && results.map((r, i) => (
+            <div key={i} className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-dark-500 font-mono bg-dark-900/60 px-2 py-1 rounded">{r.command}</p>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  r.success ? 'bg-green-400/10 text-green-400' : 'bg-red-400/10 text-red-400'
+                }`}>{r.success ? 'OK' : 'Erro'}</span>
+              </div>
+              <pre className="bg-dark-900 border border-dark-700 rounded-lg p-3 text-xs text-dark-200 font-mono whitespace-pre-wrap overflow-x-auto max-h-64 overflow-y-auto">
+                {r.output || '(sem saída)'}
+              </pre>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Painel de Detalhes do Target ─────────────────────────────────────────────
 
 function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: () => void }) {
@@ -567,6 +719,7 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
   const [loading, setLoading] = useState(false)
   const [polling, setPolling] = useState(false)
   const [actionModal, setActionModal] = useState<{ objectId?: string; actionType?: string } | null>(null)
+  const [pppoeModal, setPppoeModal] = useState<{ interface: string } | null>(null)
 
   const loadTabData = useCallback(async () => {
     setLoading(true)
@@ -899,6 +1052,15 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
                     </div>
                     {/* Botões de ação rápida */}
                     <div className="col-span-2 flex items-center justify-end gap-1">
+                      {/* Botão PPPoE — apenas para subinterfaces (nome com ponto) */}
+                      {iface.name.includes('.') && (
+                        <button
+                          onClick={() => setPppoeModal({ interface: iface.name })}
+                          title="Consultar PPPoE nesta subinterface"
+                          className="p-1 rounded text-blue-400 hover:bg-blue-400/10 transition-colors">
+                          <Users className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <button
                         onClick={() => setActionModal({ objectId: iface.name, actionType: iface.is_up ? 'if_disable' : 'if_enable' })}
                         title={iface.is_up ? 'Desativar interface' : 'Ativar interface'}
@@ -1068,6 +1230,14 @@ function TargetDetail({ target, onRefresh }: { target: SnmpTarget; onRefresh: ()
           initialObjectId={actionModal.objectId}
           initialActionType={actionModal.actionType}
           onClose={() => setActionModal(null)}
+        />
+      )}
+
+      {pppoeModal !== null && (
+        <PppoeModal
+          target={target}
+          interfaceName={pppoeModal.interface}
+          onClose={() => setPppoeModal(null)}
         />
       )}
     </div>

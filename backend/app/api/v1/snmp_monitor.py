@@ -807,3 +807,161 @@ async def get_summary(
         "never_polled":   never_polled,
         "open_alerts":    open_alerts,
     }
+
+
+# ─── PPPoE Query ──────────────────────────────────────────────────────────────
+
+class PppoeQueryRequest(BaseModel):
+    """
+    Consulta PPPoE em um roteador Huawei via SSH.
+    - interface: nome da subinterface (ex: GigabitEthernet0/1/8.1305)
+    - username: login do cliente (opcional — se informado, faz consulta por usuário)
+    - slot: slot do roteador (padrão 0)
+    """
+    interface: Optional[str] = None
+    username: Optional[str] = None
+    slot: int = 0
+
+
+@router.post("/targets/{target_id}/pppoe-query")
+async def pppoe_query(
+    target_id: UUID,
+    body: PppoeQueryRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Executa consultas PPPoE em roteador Huawei via SSH interativo.
+
+    Modos de consulta:
+    - interface + sem username → total de sessões PPPoE na subinterface (count)
+    - interface + sem username (list) → lista todas as sessões PPPoE online na subinterface
+    - username → consulta detalhada por login do cliente (verbose)
+
+    Requer que o target SNMP tenha um dispositivo vinculado (device_id) com
+    credenciais SSH configuradas.
+    """
+    from app.models.device import Device
+    from app.services.command_runner import CommandRunner
+    import asyncio
+
+    # Buscar target SNMP
+    result = await db.execute(select(SnmpTarget).where(SnmpTarget.id == target_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target SNMP não encontrado.")
+
+    if not target.device_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Este target SNMP não tem dispositivo vinculado. "
+                   "Edite o target e selecione o dispositivo correspondente."
+        )
+
+    # Buscar dispositivo vinculado
+    dev_result = await db.execute(select(Device).where(Device.id == target.device_id))
+    device = dev_result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Dispositivo vinculado não encontrado.")
+
+    if not device.username:
+        raise HTTPException(status_code=400, detail="Dispositivo sem usuário SSH configurado.")
+
+    # Descriptografar credenciais
+    try:
+        password = decrypt_field(device.password_encrypted) if device.password_encrypted else ""
+    except Exception:
+        password = ""
+
+    try:
+        private_key = decrypt_field(device.ssh_private_key_encrypted) if device.ssh_private_key_encrypted else None
+    except Exception:
+        private_key = None
+
+    if not password and not private_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Dispositivo sem senha ou chave SSH configurada."
+        )
+
+    protocol = device.primary_protocol.value if hasattr(device.primary_protocol, "value") else "ssh"
+    port = device.ssh_port if protocol == "ssh" else device.telnet_port
+
+    # Montar comandos conforme o modo de consulta
+    if body.username:
+        # Consulta por username (verbose)
+        commands = [f"display access-user username {body.username.strip()} verbose"]
+        query_type = "username"
+        query_label = f"Usuário: {body.username.strip()}"
+    elif body.interface:
+        # Converter nome da interface para formato abreviado usado no filtro Huawei
+        # Ex: GigabitEthernet0/1/8.1305 → GE0/1/8.1305
+        iface = body.interface.strip()
+        iface_short = (
+            iface.replace("GigabitEthernet", "GE")
+                 .replace("gigabitethernet", "GE")
+                 .replace("Ethernet", "Eth")
+                 .replace("ethernet", "Eth")
+        )
+        slot = body.slot
+        commands = [
+            f"display access-user slot {slot} | include {iface_short} | exclude PPPoE | count",
+            f"display access-user slot {slot} | include {iface_short} | exclude PPPoE",
+        ]
+        query_type = "interface"
+        query_label = f"Interface: {iface}"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Informe 'interface' ou 'username' para a consulta PPPoE."
+        )
+
+    # Executar via SSH interativo (Huawei VRP requer modo interativo)
+    runner = CommandRunner(
+        host=device.management_ip,
+        port=port or 22,
+        username=device.username,
+        password=password,
+        protocol=protocol,
+        timeout=30,
+        private_key=private_key,
+    )
+
+    import re
+
+    def _clean(text: str) -> str:
+        ansi = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        text = ansi.sub('', text)
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
+    results = []
+    for cmd in commands:
+        try:
+            success, output, duration_ms = await runner.run(cmd, interactive=True)
+            results.append({
+                "command": cmd,
+                "output": _clean(output),
+                "success": success,
+                "duration_ms": duration_ms,
+            })
+        except Exception as e:
+            results.append({
+                "command": cmd,
+                "output": "",
+                "success": False,
+                "duration_ms": 0,
+                "error": str(e),
+            })
+
+    return {
+        "target_id": str(target_id),
+        "target_name": target.name,
+        "device_name": device.name,
+        "device_ip": device.management_ip,
+        "query_type": query_type,
+        "query_label": query_label,
+        "results": results,
+    }
