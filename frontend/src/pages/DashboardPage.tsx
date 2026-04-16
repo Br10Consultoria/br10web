@@ -128,13 +128,23 @@ export default function DashboardPage() {
   ].filter(d => d.value > 0) : []  // cores fixas por nome, não por índice
 
   // Calcular disponibilidade geral
-  const availability = stats && stats.total > 0
-    ? Math.round((stats.online / stats.total) * 100)
+  // Considera apenas dispositivos monitorados (online + offline), excluindo manutenção e desconhecidos
+  const monitoredDevices = stats ? (stats.online || 0) + (stats.offline || 0) : 0
+  const availability = stats && monitoredDevices > 0
+    ? Math.round((stats.online / monitoredDevices) * 100)
     : null
 
-  // Agrupar dispositivos por tipo
+  // Agrupar dispositivos por tipo — usa stats.by_type para contar TODOS os dispositivos (não só os 10 recentes)
   const devicesByType: Record<string, number> = {}
-  if (devices) {
+  if (stats?.by_type) {
+    Object.entries(stats.by_type).forEach(([typeKey, count]) => {
+      if ((count as number) > 0) {
+        const label = DEVICE_TYPE_LABELS[typeKey] || typeKey.replace(/_/g, ' ').toUpperCase()
+        devicesByType[label] = count as number
+      }
+    })
+  } else if (devices) {
+    // Fallback: agrupar pelos dispositivos carregados
     devices.forEach((d: any) => {
       const label = DEVICE_TYPE_LABELS[d.device_type] || d.device_type || 'Outro'
       devicesByType[label] = (devicesByType[label] || 0) + 1

@@ -19,15 +19,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 try:
-    from pysnmp.hlapi.v3arch.asyncio import (
+    from pysnmp.hlapi.asyncio import (
         SnmpEngine, CommunityData, UdpTransportTarget,
         ContextData, ObjectType, ObjectIdentity,
-        get_cmd, walk_cmd,
+        getCmd as get_cmd, walkCmd as walk_cmd,
     )
     PYSNMP_AVAILABLE = True
 except ImportError:
     PYSNMP_AVAILABLE = False
-    logger.warning("pysnmp não instalado — módulo SNMP desabilitado. Execute: pip install pysnmp")
+    logger.warning("pysnmp não instalado — módulo SNMP desabilitado. Execute: pip install pysnmp==6.2.6")
 
 # ─── OIDs ─────────────────────────────────────────────────────────────────────
 
@@ -95,9 +95,9 @@ async def snmp_get(host: str, community: str, oid: str, port: int = 161, timeout
     """Executa um SNMP GET e retorna o valor ou None em caso de erro."""
     if not PYSNMP_AVAILABLE:
         return None
+    engine = SnmpEngine()
     try:
-        engine = SnmpEngine()
-        transport = await UdpTransportTarget.create((host, port), timeout=timeout, retries=1)
+        transport = UdpTransportTarget((host, port), timeout=timeout, retries=1)
         error_indication, error_status, error_index, var_binds = await get_cmd(
             engine,
             CommunityData(community, mpModel=1),  # mpModel=1 = SNMPv2c
@@ -105,7 +105,6 @@ async def snmp_get(host: str, community: str, oid: str, port: int = 161, timeout
             ContextData(),
             ObjectType(ObjectIdentity(oid)),
         )
-        engine.close_dispatcher()
         if error_indication or error_status:
             return None
         for var_bind in var_binds:
@@ -113,6 +112,11 @@ async def snmp_get(host: str, community: str, oid: str, port: int = 161, timeout
     except Exception as e:
         logger.debug(f"SNMP GET {host} {oid}: {e}")
         return None
+    finally:
+        try:
+            engine.close_dispatcher()
+        except Exception:
+            pass
 
 
 async def snmp_bulk_walk(host: str, community: str, oid: str, port: int = 161,
@@ -120,7 +124,7 @@ async def snmp_bulk_walk(host: str, community: str, oid: str, port: int = 161,
     """
     Executa SNMP WALK e retorna lista de (oid_str, value).
     Para automaticamente quando sai da subárvore do OID base.
-    Usa walk_cmd (async generator) do pysnmp 7.x.
+    Usa walkCmd (async generator) do pysnmp 6.x.
     """
     if not PYSNMP_AVAILABLE:
         return []
@@ -129,7 +133,7 @@ async def snmp_bulk_walk(host: str, community: str, oid: str, port: int = 161,
     base_prefix = oid.rstrip(".") + "."
     engine = SnmpEngine()
     try:
-        transport = await UdpTransportTarget.create((host, port), timeout=timeout, retries=1)
+        transport = UdpTransportTarget((host, port), timeout=timeout, retries=1)
         async for error_indication, error_status, error_index, var_binds in walk_cmd(
             engine,
             CommunityData(community, mpModel=1),
