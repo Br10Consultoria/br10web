@@ -177,6 +177,12 @@ async def _run_migrations(conn):
         "CREATE INDEX IF NOT EXISTS ix_backup_schedules_status ON backup_schedules(status)",
         "CREATE INDEX IF NOT EXISTS ix_backup_executions_schedule_id ON backup_executions(schedule_id)",
         "CREATE INDEX IF NOT EXISTS ix_backup_executions_status ON backup_executions(status)",
+        # ── Vulnerability Scanner: adicionar client_id e converter ENUMs ──
+        "ALTER TABLE vuln_scans ADD COLUMN IF NOT EXISTS client_id UUID REFERENCES clients(id) ON DELETE SET NULL",
+        "CREATE INDEX IF NOT EXISTS ix_vuln_scans_client_id ON vuln_scans(client_id)",
+        "ALTER TABLE vuln_scans ALTER COLUMN scanner TYPE VARCHAR(50) USING scanner::text",
+        "ALTER TABLE vuln_scans ALTER COLUMN status TYPE VARCHAR(50) USING status::text",
+        "ALTER TABLE vuln_findings ALTER COLUMN severity TYPE VARCHAR(50) USING severity::text",
     ]
     for sql in migrations:
         try:
