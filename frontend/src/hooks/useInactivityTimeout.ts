@@ -43,7 +43,10 @@ export function useInactivityTimeout() {
     // Limpar estado de autenticação
     logout()
 
-    // Limpar sessionStorage explicitamente para garantir estado limpo
+    // Limpar localStorage e sessionStorage para garantir estado limpo
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('br10-auth')
     sessionStorage.removeItem('access_token')
     sessionStorage.removeItem('refresh_token')
     sessionStorage.removeItem('br10-auth')

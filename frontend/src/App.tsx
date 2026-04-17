@@ -28,8 +28,36 @@ import BlacklistMonitorPage from './pages/BlacklistMonitorPage'
 import SnmpMonitorPage from './pages/SnmpMonitorPage'
 import VulnScannerPage from './pages/VulnScannerPage'
 
+// ─── Hydration Guard ──────────────────────────────────────────────────────────
+//
+// PROBLEMA: O Zustand/persist lê o localStorage de forma ASSÍNCRONA.
+// Antes da hidratação completar, isAuthenticated=false mesmo que o token
+// esteja salvo no localStorage. Isso causava um redirecionamento instantâneo
+// para /login ao reabrir o navegador, antes mesmo do token ser lido.
+//
+// SOLUÇÃO: Aguardar _hydrated=true antes de renderizar qualquer rota protegida.
+// Durante a hidratação, exibe um spinner mínimo para evitar flash de conteúdo.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+function HydrationLoader() {
+  return (
+    <div className="min-h-screen bg-dark-950 flex items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-dark-500 text-sm">Carregando...</p>
+      </div>
+    </div>
+  )
+}
+
 function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
-  const { isAuthenticated, user } = useAuthStore()
+  const { isAuthenticated, user, _hydrated } = useAuthStore()
+
+  // Aguardar hidratação do Zustand antes de decidir redirecionar
+  if (!_hydrated) {
+    return <HydrationLoader />
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
@@ -43,7 +71,13 @@ function PrivateRoute({ children, roles }: { children: React.ReactNode; roles?: 
 }
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, _hydrated } = useAuthStore()
+
+  // Aguardar hidratação antes de redirecionar usuário já autenticado
+  if (!_hydrated) {
+    return <HydrationLoader />
+  }
+
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />
   }
