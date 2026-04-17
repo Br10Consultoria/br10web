@@ -199,10 +199,9 @@ export default function DeviceFormModal({ device, onClose, onSuccess }: Props) {
 
     const portData: Record<string, number | null> = {}
     for (const p of PROTOCOLS) {
+      // Se o protocolo estiver ativado, envia a porta (ou a padrão). Se desativado, envia null.
       portData[p.field] = enabledProtocols[p.value] ? (ports[p.value] || p.defaultPort) : null
     }
-    if (!portData.ssh_port) portData.ssh_port = 22
-    if (!portData.telnet_port) portData.telnet_port = 23
 
     const payload: Record<string, any> = {
       name: name.trim(),

@@ -11,10 +11,12 @@ import {
   Wifi, WifiOff, HelpCircle, Network, GitBranch,
   Shield, Search, RefreshCw, AlertCircle, Loader2,
   MapPin, Phone, Mail, Tag, Globe, Cpu, Info,
-  Activity, Layers, ArrowRight, Clock,
+  Activity, Layers, ArrowRight, Clock, Edit2, Terminal,
 } from 'lucide-react'
-import { clientsApi } from '../utils/api'
+import { clientsApi, devicesApi } from '../utils/api'
 import api from '../utils/api'
+import DeviceFormModal from '../components/devices/DeviceFormModal'
+import { useNavigate } from 'react-router-dom'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -304,7 +306,8 @@ function VpnsTable({ vpns }: { vpns: DeviceVpn[] }) {
 
 type DeviceTab = 'info' | 'vlans' | 'ports' | 'routes' | 'vpns'
 
-function DeviceCard({ device }: { device: DeviceData }) {
+function DeviceCard({ device, onEdit }: { device: DeviceData; onEdit: (d: any) => void }) {
+  const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
   const [activeTab, setActiveTab] = useState<DeviceTab>('info')
 
@@ -365,6 +368,25 @@ function DeviceCard({ device }: { device: DeviceData }) {
               </span>
             )}
           </div>
+
+          {/* Ações Rápidas */}
+          <div className="flex items-center gap-1 mr-2" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => onEdit(device)}
+              className="p-1.5 text-dark-400 hover:text-brand-400 hover:bg-brand-500/10 rounded-lg transition-colors"
+              title="Editar Dispositivo"
+            >
+              <Edit2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => navigate(`/devices/${device.id}/terminal`)}
+              className="p-1.5 text-dark-400 hover:text-brand-400 hover:bg-brand-500/10 rounded-lg transition-colors"
+              title="Acessar Terminal"
+            >
+              <Terminal className="w-4 h-4" />
+            </button>
+          </div>
+
           {expanded ? (
             <ChevronDown className="w-4 h-4 text-dark-500" />
           ) : (
@@ -538,6 +560,7 @@ export default function ClientNetworkPage() {
   const [searchDevice, setSearchDevice] = useState('')
   const [clientSearch, setClientSearch] = useState('')
   const [expandAll, setExpandAll] = useState(false)
+  const [editingDevice, setEditingDevice] = useState<any>(null)
 
   // Lista de clientes
   const { data: clients = [], isLoading: loadingClients } = useQuery({
@@ -744,11 +767,26 @@ export default function ClientNetworkPage() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {filteredDevices.map(device => (
-                  <DeviceCard key={device.id} device={device} />
+                  <DeviceCard 
+                    key={device.id} 
+                    device={device} 
+                    onEdit={(d) => setEditingDevice(d)}
+                  />
                 ))}
               </div>
+
+              {editingDevice && (
+                <DeviceFormModal
+                  device={editingDevice}
+                  onClose={() => setEditingDevice(null)}
+                  onSuccess={() => {
+                    setEditingDevice(null)
+                    refetchNetwork()
+                  }}
+                />
+              )}
             )}
           </div>
         ) : null}

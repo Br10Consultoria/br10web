@@ -268,11 +268,13 @@ async def update_device(
     # exclude_unset=True: só atualiza campos enviados pelo cliente
     # Isso permite zerar campos opcionais (winbox_port, http_port, https_port) enviando null
     update_dict = device_data.dict(exclude_unset=True, exclude={"password", "enable_password"})
-    # Garantir que ssh_port e telnet_port nunca sejam None (NOT NULL no banco)
+    # Permitir que ssh_port e telnet_port sejam 0 para indicar desativado, 
+    # mas manter compatibilidade com o banco que é NOT NULL.
+    # Se o frontend enviar null, interpretamos como desativado (0).
     if "ssh_port" in update_dict and update_dict["ssh_port"] is None:
-        update_dict["ssh_port"] = 22
+        update_dict["ssh_port"] = 0
     if "telnet_port" in update_dict and update_dict["telnet_port"] is None:
-        update_dict["telnet_port"] = 23
+        update_dict["telnet_port"] = 0
 
     # Criptografar credenciais se fornecidas
     if device_data.password:
