@@ -381,36 +381,64 @@ async def execute_command(
     await db.refresh(execution)
 
     # ── Auditoria de execução de comando ──────────────────────────────────────
+    from app.core.audit_helper import log_audit
     audit_action = AuditAction.COMMAND_EXECUTED if success else AuditAction.COMMAND_FAILED
     audit_status = "success" if success else "failure"
-    try:
-        await db.execute(
-            AuditLog.__table__.insert().values(
-                action=audit_action,
-                description=(
-                    f"Comando '{data.command[:80]}{'...' if len(data.command) > 80 else ''}' "
-                    f"executado em {device.name} ({device.management_ip}) "
-                    f"via {protocol.upper()} por {current_user.username}"
-                ),
-                status=audit_status,
-                user_id=current_user.id,
-                device_id=device.id,
-                resource_type="automation",
-                resource_id=str(execution.id),
-                error_message=execution.error_message if not success else None,
-                extra_data={
-                    "command": data.command,
-                    "protocol": protocol.upper(),
-                    "interactive": data.interactive,
-                    "duration_ms": execution.duration_ms,
-                    "template_name": template_name,
-                    "execution_id": str(execution.id),
-                },
-            )
-        )
-        await db.commit()
-    except Exception as audit_err:
-        logger.error(f"Falha ao gravar auditoria de automação: {audit_err}")
+    
+    # Log de auditoria padrão
+    await log_audit(
+        db,
+        action=audit_action,
+        description=(
+            f"Comando '{data.command[:80]}{'...' if len(data.command) > 80 else ''}' "
+            f"executado em {device.name} ({device.management_ip}) "
+            f"via {protocol.upper()} por {current_user.username}"
+        ),
+        status=audit_status,
+        user_id=current_user.id,
+        device_id=device.id,
+        resource_type="automation",
+        resource_id=str(execution.id),
+        error_message=execution.error_message if not success else None,
+        extra_data={
+            "command": data.command,
+            "protocol": protocol.upper(),
+            "interactive": data.interactive,
+            "duration_ms": execution.duration_ms,
+            "template_name": template_name,
+            "execution_id": str(execution.id),
+        },
+    )
+
+    # Log de execução de serviço
+    await log_audit(
+        db,
+        action=AuditAction.SERVICE_EXECUTION,
+        description=f"Execução de automação: {template_name or 'Comando manual'}",
+        status=audit_status,
+        user_id=current_user.id,
+        device_id=device.id,
+        extra_data={
+            "service": "automation",
+            "template": template_name,
+            "duration_ms": execution.duration_ms
+        }
+    )
+
+    # Log de acesso a equipamento
+    await log_audit(
+        db,
+        action=AuditAction.EQUIPMENT_ACCESS,
+        description=f"Acesso ao equipamento {device.name} via automação ({protocol.upper()})",
+        status=audit_status,
+        user_id=current_user.id,
+        device_id=device.id,
+        extra_data={
+            "method": "automation",
+            "protocol": protocol,
+            "command": data.command[:100]
+        }
+    )
 
     return _execution_to_dict(execution)
 

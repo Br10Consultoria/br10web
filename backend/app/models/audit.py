@@ -95,6 +95,13 @@ class AuditAction(str, enum.Enum):
     EXPORT_DATA = "export_data"
     IMPORT_DATA = "import_data"
 
+    # ── Logs Adicionais ───────────────────────────────────────────────────────
+    ACCESS_LOG = "access_log"
+    SERVICE_EXECUTION = "service_execution"
+    BACKEND_ERROR = "backend_error"
+    FRONTEND_ERROR = "frontend_error"
+    EQUIPMENT_ACCESS = "equipment_access"
+
 
 class AuditLog(Base, UUIDMixin, TimestampMixin):
     """Log de auditoria de todas as ações do sistema."""

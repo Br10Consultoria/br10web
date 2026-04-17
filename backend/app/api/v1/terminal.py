@@ -262,6 +262,23 @@ async def terminal_websocket(
             },
         )
 
+        # Log adicional de acesso a equipamento
+        await log_audit(
+            db,
+            action=AuditAction.EQUIPMENT_ACCESS,
+            description=f"Acesso ao equipamento {device.name} via terminal {proto.upper()}",
+            status="success",
+            user_id=user.id,
+            device_id=device.id,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            extra_data={
+                "method": "terminal",
+                "protocol": proto,
+                "session_id": session_id
+            }
+        )
+
         await websocket.send_json({
             "type": "connected",
             "session_id": session_id,

@@ -190,6 +190,22 @@ async def run_device_status_check():
             await db.commit()
 
             elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            
+            from app.core.audit_helper import log_audit
+            from app.models.audit import AuditAction
+            await log_audit(
+                db,
+                action=AuditAction.SERVICE_EXECUTION,
+                description=f"Verificação de status concluída: {online_count} online, {offline_count} offline",
+                status="success",
+                extra_data={
+                    "service": "device_status_check",
+                    "online": online_count,
+                    "offline": offline_count,
+                    "duration_s": round(elapsed, 2)
+                }
+            )
+
             logger.info(
                 f"[Scheduler] Verificação concluída em {elapsed:.1f}s — "
                 f"Online: {online_count}, Offline: {offline_count}, "

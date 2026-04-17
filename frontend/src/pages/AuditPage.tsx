@@ -63,6 +63,12 @@ const ACTION_COLORS: Record<string, string> = {
   route_created: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
   route_updated: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
   route_deleted: 'bg-red-500/10 text-red-400 border-red-500/20',
+  // Logs Adicionais
+  access_log: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  service_execution: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  backend_error: 'bg-red-500/10 text-red-400 border-red-500/20',
+  frontend_error: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
+  equipment_access: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -115,6 +121,11 @@ const ACTION_LABELS: Record<string, string> = {
   cgnat_generated: 'CGNAT Gerado',
   cgnat_saved: 'CGNAT Salvo',
   cgnat_deleted: 'CGNAT Removido',
+  access_log: 'Log de Acesso',
+  service_execution: 'Execução de Serviço',
+  backend_error: 'Erro de Backend',
+  frontend_error: 'Erro de Frontend',
+  equipment_access: 'Acesso a Equipamento',
 }
 
 const ACTION_GROUPS: Record<string, string[]> = {
@@ -130,6 +141,7 @@ const ACTION_GROUPS: Record<string, string[]> = {
   'CGNAT': ['cgnat_generated', 'cgnat_saved', 'cgnat_deleted'],
   'Usuários': ['user_created', 'user_updated', 'user_deleted'],
   'Rotas': ['route_created', 'route_updated', 'route_deleted'],
+  'Logs de Sistema': ['access_log', 'service_execution', 'backend_error', 'frontend_error', 'equipment_access'],
 }
 
 const STATUS_COLORS: Record<string, string> = {

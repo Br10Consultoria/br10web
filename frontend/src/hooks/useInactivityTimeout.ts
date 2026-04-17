@@ -7,14 +7,14 @@
  * Eventos monitorados: mousemove, mousedown, keydown, touchstart, scroll, click
  *
  * Fluxo:
- *   0s ──── atividade ──── 4min ──── aviso ──── 5min ──── logout automático
+ *   0s ──── atividade ──── 9min ──── aviso ──── 10min ──── logout automático
  */
 import { useEffect, useRef, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { useAuthStore } from '../store/authStore'
 
-const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000   // 5 minutos
-const WARNING_BEFORE_MS     = 1 * 60 * 1000   // aviso 1 minuto antes (aos 4 min)
+const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000   // 10 minutos
+const WARNING_BEFORE_MS     = 1 * 60 * 1000    // aviso 1 minuto antes (aos 9 min)
 
 // ID do toast de aviso — para poder dispensá-lo ao detectar atividade
 const WARNING_TOAST_ID = 'inactivity-warning'

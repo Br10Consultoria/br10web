@@ -12,8 +12,11 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import init_db, AsyncSessionLocal
 from app.core.scheduler import start_scheduler, stop_scheduler
+from app.core.logging_middleware import StructuredLoggingMiddleware
+from app.core.audit_helper import log_audit
+from app.models.audit import AuditAction
 from app.api.v1.auth import router as auth_router
 from app.api.v1.devices import router as devices_router
 from app.api.v1.vpn import router as vpn_router, routes_router
@@ -110,6 +113,8 @@ app.add_middleware(
     expose_headers=["X-Total-Count", "X-Page", "X-Per-Page"],
 )
 
+app.add_middleware(StructuredLoggingMiddleware)
+
 # Security headers middleware
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -196,3 +201,24 @@ async def root():
         "docs": "/api/docs",
         "health": "/health",
     }
+
+
+@app.post("/api/v1/logs/frontend", tags=["System"])
+async def log_frontend_error(request: Request):
+    """Endpoint para receber logs de erro do frontend."""
+    data = await request.json()
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    
+    async with AsyncSessionLocal() as db:
+        await log_audit(
+            db,
+            action=AuditAction.FRONTEND_ERROR,
+            description=data.get("message", "Erro no frontend"),
+            status="failure",
+            ip_address=client_ip,
+            user_agent=user_agent,
+            error_message=data.get("stack"),
+            extra_data=data.get("extra", {})
+        )
+    return {"status": "ok"}

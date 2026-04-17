@@ -353,6 +353,41 @@ async def run_backup_schedule(
     await db.commit()
     await db.refresh(execution)
 
+    # ── Logs de Auditoria Adicionais ──────────────────────────────────────────
+    from app.core.audit_helper import log_audit
+    from app.models.audit import AuditAction
+    
+    # Log de execução de serviço
+    await log_audit(
+        db,
+        action=AuditAction.SERVICE_EXECUTION,
+        description=f"Execução de backup agendado: {schedule.name}",
+        status="success" if final_status == BackupRunStatus.SUCCESS else "warning" if final_status == BackupRunStatus.PARTIAL else "failure",
+        extra_data={
+            "service": "device_backup",
+            "schedule_name": schedule.name,
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "duration_ms": total_ms
+        }
+    )
+
+    # Log de acesso a equipamento para cada dispositivo no backup
+    for dr in device_results:
+        if dr.get("status") == "success":
+            await log_audit(
+                db,
+                action=AuditAction.EQUIPMENT_ACCESS,
+                description=f"Acesso ao equipamento {dr.get('device_name')} para backup",
+                status="success",
+                device_id=dr.get("device_id"),
+                extra_data={
+                    "method": "backup_playbook",
+                    "schedule_id": schedule_id,
+                    "duration_ms": dr.get("duration_ms")
+                }
+            )
+
     # Enviar Telegram
     if schedule.telegram_enabled and schedule.telegram_token and schedule.telegram_chat_id:
         should_notify = (
