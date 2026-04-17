@@ -937,10 +937,28 @@ async def pppoe_query(
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
 
+    import logging as _logging
+    _pppoe_logger = _logging.getLogger(__name__)
+
+    _pppoe_logger.info(
+        "[PPPoE] Iniciando consulta %s em %s (%s:%s) — %s",
+        query_type, device.name, device.management_ip, port, query_label
+    )
+
     results = []
     for cmd in commands:
         try:
-            success, output, duration_ms = await runner.run(cmd, interactive=True)
+            success, output, duration_ms = await runner.run(cmd, interactive=(protocol == "ssh"))
+            if not success:
+                _pppoe_logger.error(
+                    "[PPPoE] Comando falhou em %s (%s) — cmd=%r output=%r",
+                    device.management_ip, protocol, cmd, output[:300]
+                )
+            else:
+                _pppoe_logger.info(
+                    "[PPPoE] Comando OK em %s — %dms, %d chars de saída",
+                    device.management_ip, duration_ms, len(output)
+                )
             results.append({
                 "command": cmd,
                 "output": _clean(output),
@@ -948,6 +966,10 @@ async def pppoe_query(
                 "duration_ms": duration_ms,
             })
         except Exception as e:
+            _pppoe_logger.error(
+                "[PPPoE] Exceção ao executar comando em %s — %s",
+                device.management_ip, e, exc_info=True
+            )
             results.append({
                 "command": cmd,
                 "output": "",

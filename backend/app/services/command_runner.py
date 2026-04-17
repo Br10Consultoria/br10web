@@ -1,10 +1,19 @@
 """
 BR10 NetManager - Command Runner Service
 Executa comandos em dispositivos via SSH ou Telnet e captura a saída completa.
-Reutiliza as classes SSHTerminalSession e TelnetTerminalSession do terminal.py.
+
+CORREÇÕES v2:
+- Telnet: tratamento correto de negociação IAC (responde WONT/DONT para evitar Broken pipe)
+- Telnet: reconexão automática com até 2 tentativas em caso de BrokenPipeError/ConnectionReset
+- Telnet: timeout de socket separado para connect vs. read
+- Telnet: logging detalhado de erros (aparece nos logs do container)
+- Telnet: keep-alive via SO_KEEPALIVE para conexões longas
+- Geral: todos os erros são logados com logger.error() para aparecer nos logs do backend
 """
 import asyncio
 import logging
+import select as sel
+import socket
 import time
 from typing import Optional, Tuple
 import paramiko
@@ -26,6 +35,15 @@ PAGER_PROMPTS = [
     b"<--- More --->", b"more", b"More",
     b"Press any key", b"[Q]uit",
 ]
+
+# Comandos IAC do protocolo Telnet
+IAC  = 255  # Interpret As Command
+DONT = 254
+DO   = 253
+WONT = 252
+WILL = 251
+SB   = 250  # Subnegotiation Begin
+SE   = 240  # Subnegotiation End
 
 
 class CommandRunner:
@@ -90,23 +108,11 @@ class CommandRunner:
             import io
             key_file = io.StringIO(self.private_key)
             pkey = None
-            # Tentar RSA
-            try:
-                pkey = paramiko.RSAKey.from_private_key(key_file)
-            except Exception:
-                pass
-            # Tentar Ed25519
-            if pkey is None:
+            for KeyClass in (paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey):
                 try:
                     key_file.seek(0)
-                    pkey = paramiko.Ed25519Key.from_private_key(key_file)
-                except Exception:
-                    pass
-            # Tentar ECDSA
-            if pkey is None:
-                try:
-                    key_file.seek(0)
-                    pkey = paramiko.ECDSAKey.from_private_key(key_file)
+                    pkey = KeyClass.from_private_key(key_file)
+                    break
                 except Exception:
                     pass
             if pkey:
@@ -121,7 +127,6 @@ class CommandRunner:
 
     def _run_ssh(self, commands: list[str]) -> Tuple[bool, str]:
         """Executa comandos via SSH usando exec_command (não interativo)."""
-        # Validar credenciais antes de tentar conectar
         self._validate_ssh_credentials()
 
         client = paramiko.SSHClient()
@@ -151,13 +156,20 @@ class CommandRunner:
             return True, "\n".join(output_parts)
 
         except paramiko.AuthenticationException:
-            return False, "Falha na autenticação SSH. Verifique usuário/senha."
+            msg = "Falha na autenticação SSH. Verifique usuário/senha."
+            logger.error("[CommandRunner] SSH auth failed for %s:%s — %s", self.host, self.port, msg)
+            return False, msg
         except paramiko.SSHException as e:
-            return False, f"Erro SSH: {str(e)}"
+            msg = f"Erro SSH: {str(e)}"
+            logger.error("[CommandRunner] SSHException for %s:%s — %s", self.host, self.port, msg)
+            return False, msg
         except ValueError as e:
+            logger.error("[CommandRunner] Validation error for %s — %s", self.host, str(e))
             return False, str(e)
         except Exception as e:
-            return False, f"Erro de conexão SSH: {str(e)}"
+            msg = f"Erro de conexão SSH: {str(e)}"
+            logger.error("[CommandRunner] SSH error for %s:%s — %s", self.host, self.port, msg, exc_info=True)
+            return False, msg
         finally:
             try:
                 client.close()
@@ -169,7 +181,6 @@ class CommandRunner:
         Executa comandos via SSH em modo interativo (shell).
         Útil para dispositivos que não suportam exec_command (ex: Huawei, ZTE).
         """
-        # Validar credenciais antes de tentar conectar
         self._validate_ssh_credentials()
 
         client = paramiko.SSHClient()
@@ -191,17 +202,14 @@ class CommandRunner:
                 if not cmd:
                     continue
 
-                # Enviar comando
                 channel.send(cmd + "\n")
                 time.sleep(0.3)
 
-                # Coletar saída até o próximo prompt
                 cmd_output = self._collect_output(channel, timeout=self.timeout)
                 if len(commands) > 1:
                     output_parts.append(f"\n--- {cmd} ---")
                 output_parts.append(cmd_output)
 
-            # Fechar sessão
             try:
                 channel.send("quit\n")
             except Exception:
@@ -211,11 +219,16 @@ class CommandRunner:
             return True, "\n".join(output_parts)
 
         except paramiko.AuthenticationException:
-            return False, "Falha na autenticação SSH. Verifique usuário/senha."
+            msg = "Falha na autenticação SSH. Verifique usuário/senha."
+            logger.error("[CommandRunner] SSH interactive auth failed for %s:%s", self.host, self.port)
+            return False, msg
         except ValueError as e:
+            logger.error("[CommandRunner] Validation error for %s — %s", self.host, str(e))
             return False, str(e)
         except Exception as e:
-            return False, f"Erro SSH interativo: {str(e)}"
+            msg = f"Erro SSH interativo: {str(e)}"
+            logger.error("[CommandRunner] SSH interactive error for %s:%s — %s", self.host, self.port, msg, exc_info=True)
+            return False, msg
         finally:
             try:
                 client.close()
@@ -223,11 +236,7 @@ class CommandRunner:
                 pass
 
     def _wait_for_prompt(self, channel, timeout: int = 10) -> str:
-        """
-        Aguarda um prompt de comando no canal SSH.
-        Trata automaticamente prompts de senha adicionais (AAA/RADIUS Huawei)
-        e prompts de confirmação (Y/N).
-        """
+        """Aguarda um prompt de comando no canal SSH."""
         buffer = b""
         start = time.time()
         password_sent = False
@@ -238,22 +247,19 @@ class CommandRunner:
                     buffer += chunk
                     tail = buffer[-200:].lower()
 
-                    # Tratar prompt de senha adicional (AAA/RADIUS Huawei)
                     if not password_sent and (b"password:" in tail or b"senha:" in tail):
                         if self.password:
                             channel.send(self.password + "\n")
                             password_sent = True
                             time.sleep(0.5)
-                            buffer = b""  # limpar buffer após enviar senha
+                            buffer = b""
                             continue
 
-                    # Tratar prompt de confirmação (Y/N)
                     if b"[y/n]" in tail or b"(y/n)" in tail:
                         channel.send("y\n")
                         time.sleep(0.3)
                         continue
 
-                    # Verificar se chegou ao prompt pronto
                     if any(buffer.endswith(p) or buffer.endswith(p + b" ") for p in READY_PROMPTS):
                         return buffer.decode("utf-8", errors="replace")
             except Exception:
@@ -275,26 +281,22 @@ class CommandRunner:
                     last_data = time.time()
                     tail = buffer[-200:].lower()
 
-                    # Responder a paginadores automaticamente
                     for pager in PAGER_PROMPTS:
                         if pager in buffer[-100:]:
-                            channel.send(" ")  # espaço avança a página
+                            channel.send(" ")
                             time.sleep(0.2)
                             break
 
-                    # Tratar prompt de senha inesperado durante execução
                     if b"password:" in tail or b"senha:" in tail:
                         if self.password:
                             channel.send(self.password + "\n")
                             time.sleep(0.5)
                             continue
 
-                    # Verificar se chegou ao prompt final
-                    stripped = buffer.rstrip()
-                    if any(stripped.endswith(p) for p in READY_PROMPTS):
+                    stripped = buffer
+                    if any(stripped.rstrip().endswith(p) for p in READY_PROMPTS):
                         break
                 else:
-                    # Sem dados — verificar idle timeout
                     if time.time() - last_data > 3.0:
                         break
             except Exception:
@@ -306,73 +308,112 @@ class CommandRunner:
 
     # ─── Telnet ───────────────────────────────────────────────────────────────
 
-    def _run_telnet(self, commands: list[str]) -> Tuple[bool, str]:
-        """Executa comandos via Telnet."""
-        import socket
+    def _telnet_negotiate(self, sock: socket.socket, data: bytes) -> bytes:
+        """
+        Processa e responde à negociação IAC do protocolo Telnet.
 
-        sock = None
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeout)
-            sock.connect((self.host, self.port))
-            sock.setblocking(False)
+        CAUSA DO BROKEN PIPE:
+        O equipamento Huawei envia opções IAC (WILL ECHO, DO SUPPRESS-GO-AHEAD, etc.)
+        durante o handshake. Se o cliente não responder, o equipamento fecha a conexão
+        com BrokenPipeError/Errno 32 após alguns segundos.
 
-            output_parts = []
+        SOLUÇÃO:
+        - Para WILL X → responder DONT X (não aceitar a opção)
+        - Para DO X   → responder WONT X (não oferecer a opção)
+        - Exceções: ECHO (1) e SUPPRESS-GO-AHEAD (3) são aceitos (WILL/DO)
+        """
+        result = bytearray()
+        i = 0
+        response = bytearray()
 
-            # Aguardar banner e fazer login
-            time.sleep(1.0)
-            banner = self._telnet_recv(sock, timeout=5)
+        while i < len(data):
+            b = data[i]
+            if b == IAC and i + 1 < len(data):
+                cmd = data[i + 1]
 
-            # Login automático
-            if self.username:
-                sock.send((self.username + "\r\n").encode())
-                time.sleep(0.8)
-                self._telnet_recv(sock, timeout=3)
-
-            if self.password:
-                sock.send((self.password + "\r\n").encode())
-                time.sleep(1.0)
-                self._telnet_recv(sock, timeout=5)  # consumir resposta do login
-
-            # Executar cada comando
-            for cmd in commands:
-                cmd = cmd.strip()
-                if not cmd:
+                if cmd == SB:
+                    # Subnegotiation — consumir até SE
+                    j = i + 2
+                    while j < len(data) - 1:
+                        if data[j] == IAC and data[j + 1] == SE:
+                            i = j + 2
+                            break
+                        j += 1
+                    else:
+                        i = len(data)
                     continue
 
-                sock.send((cmd + "\r\n").encode())
-                time.sleep(0.5)
+                elif cmd in (WILL, WONT, DO, DONT) and i + 2 < len(data):
+                    opt = data[i + 2]
+                    # Aceitar ECHO (1) e SUPPRESS-GO-AHEAD (3); rejeitar o resto
+                    if cmd == WILL:
+                        if opt in (1, 3):
+                            response.extend([IAC, DO, opt])
+                        else:
+                            response.extend([IAC, DONT, opt])
+                    elif cmd == DO:
+                        if opt in (1, 3):
+                            response.extend([IAC, WILL, opt])
+                        else:
+                            response.extend([IAC, WONT, opt])
+                    # WONT e DONT não precisam de resposta
+                    i += 3
+                    continue
 
-                cmd_output = self._telnet_collect(sock, timeout=self.timeout)
-                if len(commands) > 1:
-                    output_parts.append(f"\n--- {cmd} ---")
-                output_parts.append(cmd_output)
+                elif cmd == IAC:
+                    # Escaped IAC — byte literal 255
+                    result.append(255)
+                    i += 2
+                    continue
+                else:
+                    i += 2
+                    continue
+            else:
+                result.append(b)
+                i += 1
 
-            # Logout
+        # Enviar respostas de negociação acumuladas
+        if response:
             try:
-                sock.send(b"quit\r\n")
-                time.sleep(0.3)
-            except Exception:
-                pass
+                sock.sendall(bytes(response))
+            except Exception as e:
+                logger.debug("[Telnet] Erro ao enviar negociação IAC: %s", e)
 
-            return True, "\n".join(output_parts)
+        return bytes(result)
 
-        except socket.timeout:
-            return False, f"Timeout ao conectar em {self.host}:{self.port}"
-        except ConnectionRefusedError:
-            return False, f"Conexão recusada em {self.host}:{self.port}"
-        except Exception as e:
-            return False, f"Erro Telnet: {str(e)}"
-        finally:
-            if sock:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
+    def _telnet_connect(self) -> socket.socket:
+        """
+        Cria e conecta o socket Telnet com configurações robustas.
+        Retorna o socket após o handshake IAC inicial.
+        """
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    def _telnet_recv(self, sock, timeout: int = 3) -> bytes:
-        """Recebe dados do socket Telnet com timeout."""
-        import select as sel
+        # Keep-alive para detectar conexões mortas
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        except (AttributeError, OSError):
+            pass  # Não disponível em todos os sistemas
+
+        # Timeout de conexão
+        sock.settimeout(min(self.timeout, 15))
+        sock.connect((self.host, self.port))
+
+        # Após conectar, usar modo não-bloqueante com select()
+        sock.setblocking(False)
+
+        # Aguardar e processar negociação IAC inicial (banner + opções)
+        time.sleep(0.5)
+        raw = self._telnet_raw_recv(sock, timeout=4)
+        if raw:
+            self._telnet_negotiate(sock, raw)
+
+        return sock
+
+    def _telnet_raw_recv(self, sock: socket.socket, timeout: float = 3.0) -> bytes:
+        """Recebe dados brutos do socket Telnet (incluindo IAC)."""
         buffer = b""
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -383,16 +424,37 @@ class CommandRunner:
                     if chunk:
                         buffer += chunk
                     else:
-                        break
+                        break  # Conexão fechada
             except BlockingIOError:
                 pass
             except Exception:
                 break
-        return self._strip_telnet_iac(buffer)
+        return buffer
 
-    def _telnet_collect(self, sock, timeout: int = 30) -> str:
-        """Coleta saída Telnet até prompt ou timeout."""
-        import select as sel
+    def _telnet_recv(self, sock: socket.socket, timeout: float = 3.0) -> bytes:
+        """Recebe dados do socket Telnet, processando negociação IAC."""
+        raw = self._telnet_raw_recv(sock, timeout)
+        if raw:
+            return self._telnet_negotiate(sock, raw)
+        return b""
+
+    def _telnet_send(self, sock: socket.socket, data: bytes) -> None:
+        """Envia dados pelo socket Telnet com tratamento de BrokenPipe."""
+        try:
+            sock.sendall(data)
+        except BrokenPipeError as e:
+            logger.error(
+                "[Telnet] BrokenPipeError ao enviar para %s:%s — %s. "
+                "Verifique se o equipamento aceita Telnet e se as credenciais estão corretas.",
+                self.host, self.port, e
+            )
+            raise
+        except Exception as e:
+            logger.error("[Telnet] Erro ao enviar dados para %s:%s — %s", self.host, self.port, e)
+            raise
+
+    def _telnet_collect(self, sock: socket.socket, timeout: int = 30) -> str:
+        """Coleta saída Telnet até prompt ou timeout, processando IAC."""
         buffer = b""
         start = time.time()
         last_data = time.time()
@@ -403,59 +465,164 @@ class CommandRunner:
                 if ready:
                     chunk = sock.recv(4096)
                     if chunk:
-                        buffer += chunk
+                        # Processar IAC e acumular texto limpo
+                        clean_chunk = self._telnet_negotiate(sock, chunk)
+                        buffer += clean_chunk
                         last_data = time.time()
 
-                        clean = self._strip_telnet_iac(buffer)
-
                         # Responder paginadores
+                        tail = buffer[-100:]
                         for pager in PAGER_PROMPTS:
-                            if pager in clean[-100:]:
-                                sock.send(b" ")
+                            if pager in tail:
+                                try:
+                                    sock.sendall(b" ")
+                                except Exception:
+                                    pass
                                 time.sleep(0.2)
                                 break
 
                         # Verificar prompt final
-                        stripped = clean.rstrip()
+                        stripped = buffer.rstrip()
                         if any(stripped.endswith(p) for p in READY_PROMPTS):
                             break
                     else:
+                        # Conexão fechada pelo equipamento
+                        logger.debug("[Telnet] Conexão fechada pelo equipamento %s", self.host)
                         break
                 else:
+                    # Sem dados — verificar idle timeout
                     if time.time() - last_data > 3.0:
                         break
-            except Exception:
+            except BrokenPipeError as e:
+                logger.error("[Telnet] BrokenPipeError durante coleta de %s:%s — %s", self.host, self.port, e)
+                break
+            except Exception as e:
+                logger.debug("[Telnet] Erro durante coleta de %s — %s", self.host, e)
                 if time.time() - last_data > 2.0:
                     break
 
-        clean = self._strip_telnet_iac(buffer)
-        return clean.decode("utf-8", errors="replace")
+        return buffer.decode("utf-8", errors="replace")
 
-    def _strip_telnet_iac(self, data: bytes) -> bytes:
-        """Remove comandos IAC do protocolo Telnet."""
-        result = bytearray()
-        i = 0
-        while i < len(data):
-            if data[i] == 255:  # IAC
-                if i + 1 < len(data):
-                    cmd = data[i + 1]
-                    if cmd in (251, 252, 253, 254):
-                        i += 3
+    def _run_telnet(self, commands: list[str]) -> Tuple[bool, str]:
+        """
+        Executa comandos via Telnet com reconexão automática.
+        Tenta até 2 vezes em caso de BrokenPipeError ou ConnectionReset.
+        """
+        max_attempts = 2
+        last_error = ""
+
+        for attempt in range(1, max_attempts + 1):
+            sock = None
+            try:
+                logger.info(
+                    "[Telnet] Conectando em %s:%s (tentativa %d/%d)",
+                    self.host, self.port, attempt, max_attempts
+                )
+
+                sock = self._telnet_connect()
+                output_parts = []
+
+                # Login: username
+                if self.username:
+                    # Aguardar prompt de login
+                    login_prompt = self._telnet_recv(sock, timeout=5)
+                    logger.debug("[Telnet] Banner/login prompt: %r", login_prompt[:100])
+                    self._telnet_send(sock, (self.username + "\r\n").encode())
+                    time.sleep(0.8)
+
+                # Login: password
+                if self.password:
+                    pass_prompt = self._telnet_recv(sock, timeout=5)
+                    logger.debug("[Telnet] Password prompt: %r", pass_prompt[:100])
+                    self._telnet_send(sock, (self.password + "\r\n").encode())
+                    time.sleep(1.2)
+                    # Consumir resposta do login (pode ter mais IAC aqui)
+                    login_resp = self._telnet_recv(sock, timeout=5)
+                    logger.debug("[Telnet] Login response: %r", login_resp[:200])
+
+                    # Verificar falha de autenticação
+                    resp_lower = login_resp.lower()
+                    if any(x in resp_lower for x in (b"fail", b"invalid", b"denied", b"error", b"incorrect")):
+                        msg = "Falha na autenticação Telnet. Verifique usuário/senha."
+                        logger.error("[Telnet] Auth failed for %s:%s — response: %r", self.host, self.port, login_resp[:200])
+                        return False, msg
+
+                # Executar cada comando
+                for cmd in commands:
+                    cmd = cmd.strip()
+                    if not cmd:
                         continue
-                    elif cmd == 250:
-                        j = i + 2
-                        while j < len(data) - 1:
-                            if data[j] == 255 and data[j + 1] == 240:
-                                i = j + 2
-                                break
-                            j += 1
-                        continue
-                    else:
-                        i += 2
-                        continue
-            result.append(data[i])
-            i += 1
-        return bytes(result)
+
+                    logger.debug("[Telnet] Enviando comando: %s", cmd)
+                    self._telnet_send(sock, (cmd + "\r\n").encode())
+                    time.sleep(0.5)
+
+                    cmd_output = self._telnet_collect(sock, timeout=self.timeout)
+                    logger.debug("[Telnet] Saída do comando (%d chars)", len(cmd_output))
+
+                    if len(commands) > 1:
+                        output_parts.append(f"\n--- {cmd} ---")
+                    output_parts.append(cmd_output)
+
+                # Logout
+                try:
+                    sock.sendall(b"quit\r\n")
+                    time.sleep(0.3)
+                except Exception:
+                    pass
+
+                logger.info("[Telnet] Comandos executados com sucesso em %s:%s", self.host, self.port)
+                return True, "\n".join(output_parts)
+
+            except BrokenPipeError as e:
+                last_error = f"Erro Telnet: [Errno 32] Broken pipe"
+                logger.error(
+                    "[Telnet] BrokenPipeError em %s:%s (tentativa %d) — "
+                    "Equipamento fechou a conexão. Possíveis causas: "
+                    "(1) Credenciais incorretas, "
+                    "(2) Equipamento não aceita Telnet, "
+                    "(3) Timeout de negociação IAC, "
+                    "(4) Máximo de sessões VTY atingido.",
+                    self.host, self.port, attempt
+                )
+                if attempt < max_attempts:
+                    logger.info("[Telnet] Aguardando 2s antes de reconectar...")
+                    time.sleep(2)
+
+            except ConnectionResetError as e:
+                last_error = f"Erro Telnet: Conexão reiniciada pelo equipamento ({e})"
+                logger.error("[Telnet] ConnectionResetError em %s:%s (tentativa %d) — %s", self.host, self.port, attempt, e)
+                if attempt < max_attempts:
+                    time.sleep(2)
+
+            except socket.timeout:
+                last_error = f"Timeout ao conectar em {self.host}:{self.port} (>{self.timeout}s)"
+                logger.error("[Telnet] Timeout em %s:%s", self.host, self.port)
+                break  # Timeout não adianta tentar de novo
+
+            except ConnectionRefusedError:
+                last_error = f"Conexão recusada em {self.host}:{self.port} — Telnet desabilitado?"
+                logger.error("[Telnet] ConnectionRefused em %s:%s", self.host, self.port)
+                break  # Recusada não adianta tentar de novo
+
+            except Exception as e:
+                last_error = f"Erro Telnet: {str(e)}"
+                logger.error(
+                    "[Telnet] Erro inesperado em %s:%s (tentativa %d) — %s",
+                    self.host, self.port, attempt, e, exc_info=True
+                )
+                if attempt < max_attempts:
+                    time.sleep(1)
+
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+
+        logger.error("[Telnet] Todas as tentativas falharam para %s:%s — %s", self.host, self.port, last_error)
+        return False, last_error
 
     # ─── Interface pública ────────────────────────────────────────────────────
 
@@ -488,6 +655,14 @@ class CommandRunner:
         except Exception as e:
             success = False
             output = f"Erro inesperado: {str(e)}"
+            logger.error(
+                "[CommandRunner] Erro inesperado ao executar comando em %s (%s) — %s",
+                self.host, self.protocol, e, exc_info=True
+            )
 
         duration_ms = int((time.time() - start) * 1000)
+        logger.info(
+            "[CommandRunner] %s://%s:%s — sucesso=%s, duração=%dms, cmds=%d",
+            self.protocol, self.host, self.port, success, duration_ms, len(commands)
+        )
         return success, output, duration_ms

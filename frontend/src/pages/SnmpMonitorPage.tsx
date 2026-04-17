@@ -565,14 +565,16 @@ function PppoeModal({ target, interfaceName, onClose }: {
   const [username, setUsername] = useState('')
   const [slot, setSlot] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [results, setResults] = useState<{ command: string; output: string; success: boolean }[]>([])
+  const [results, setResults] = useState<{ command: string; output: string; success: boolean; error?: string }[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [lastMode, setLastMode] = useState<'count' | 'list' | 'username' | null>(null)
 
   const runQuery = async (queryMode: 'count' | 'list' | 'username') => {
     setLoading(true)
     setError(null)
     setResults([])
     setMode(queryMode)
+    setLastMode(queryMode)
     try {
       const payload: Record<string, unknown> = { slot }
       if (queryMode === 'username') {
@@ -582,17 +584,40 @@ function PppoeModal({ target, interfaceName, onClose }: {
         payload.interface = interfaceName
       }
       const res = await api.post(`/snmp/targets/${target.id}/pppoe-query`, payload)
+      const allResults = res.data.results || []
+
+      // Verificar se algum resultado tem erro de Broken pipe ou falha
+      const failedResult = allResults.find((r: { success: boolean; output?: string }) => !r.success)
+      if (failedResult) {
+        const errMsg = failedResult.output || failedResult.error || 'Erro desconhecido'
+        // Enriquecer mensagem de Broken pipe com dica de diagnóstico
+        if (errMsg.includes('Broken pipe') || errMsg.includes('Errno 32')) {
+          setError(
+            `Erro Telnet: Broken pipe — O equipamento fechou a conexão.\n\n` +
+            `Possíveis causas:\n` +
+            `• Credenciais Telnet incorretas no dispositivo vinculado\n` +
+            `• Máximo de sessões VTY atingido no equipamento\n` +
+            `• Equipamento configurado para SSH apenas (não Telnet)\n` +
+            `• Timeout de negociação de protocolo\n\n` +
+            `Verifique os logs do backend para detalhes completos.`
+          )
+        } else {
+          setError(errMsg)
+        }
+      }
+
       // Para mode=count, mostrar apenas o primeiro resultado; para list, mostrar o segundo
       if (queryMode === 'count') {
-        setResults([res.data.results[0]])
+        setResults([allResults[0]].filter(Boolean))
       } else if (queryMode === 'list') {
-        setResults([res.data.results[1] || res.data.results[0]])
+        setResults([allResults[1] || allResults[0]].filter(Boolean))
       } else {
-        setResults(res.data.results)
+        setResults(allResults)
       }
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { detail?: string } } }
-      setError(e?.response?.data?.detail || 'Erro ao executar consulta PPPoE')
+      const e = err as { response?: { data?: { detail?: string } }; message?: string }
+      const detail = e?.response?.data?.detail || e?.message || 'Erro ao executar consulta PPPoE'
+      setError(detail)
     } finally {
       setLoading(false)
     }
@@ -682,8 +707,20 @@ function PppoeModal({ target, interfaceName, onClose }: {
 
           {/* Erro */}
           {error && (
-            <div className="bg-red-400/10 border border-red-400/20 rounded-lg p-3">
-              <p className="text-sm text-red-400">{error}</p>
+            <div className="bg-red-400/10 border border-red-400/20 rounded-xl p-4 space-y-3">
+              <div className="flex items-start gap-2">
+                <span className="text-red-400 text-lg mt-0.5">⚠</span>
+                <pre className="text-sm text-red-300 whitespace-pre-wrap font-sans flex-1">{error}</pre>
+              </div>
+              {lastMode && (
+                <button
+                  onClick={() => runQuery(lastMode)}
+                  disabled={loading}
+                  className="flex items-center gap-2 text-xs text-red-400 hover:text-red-200 border border-red-400/30 hover:border-red-400/60 rounded-lg px-3 py-1.5 transition-colors">
+                  <RefreshCw className="w-3 h-3" />
+                  Tentar novamente
+                </button>
+              )}
             </div>
           )}
 
