@@ -44,6 +44,7 @@ class StartScanRequest(BaseModel):
     name: str
     target: str                          # IP, CIDR ou hostname
     scanner: ScannerType = ScannerType.NMAP
+    client_id: Optional[str] = None      # UUID do cliente (opcional)
     # Opções Nmap
     scan_type: str = "quick"             # quick | full | vuln | custom
     ports: Optional[str] = None          # "22,80,443" | "1-1000" | "all"
@@ -161,6 +162,7 @@ async def start_scan(
         name        = req.name,
         target      = req.target,
         scanner     = req.scanner,
+        client_id   = req.client_id,
         status      = ScanStatus.PENDING,
         scan_options = {
             "scan_type":       req.scan_type,
@@ -191,6 +193,7 @@ async def start_scan(
 async def list_scans(
     scanner: Optional[ScannerType] = None,
     status:  Optional[ScanStatus]  = None,
+    client_id: Optional[str] = None,
     limit:   int = Query(50, ge=1, le=200),
     offset:  int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -201,6 +204,8 @@ async def list_scans(
         q = q.where(VulnScan.scanner == scanner)
     if status:
         q = q.where(VulnScan.status == status)
+    if client_id:
+        q = q.where(VulnScan.client_id == client_id)
     q = q.offset(offset).limit(limit)
 
     result = await db.execute(q)
@@ -212,6 +217,8 @@ async def list_scans(
         count_q = count_q.where(VulnScan.scanner == scanner)
     if status:
         count_q = count_q.where(VulnScan.status == status)
+    if client_id:
+        count_q = count_q.where(VulnScan.client_id == client_id)
     total = (await db.execute(count_q)).scalar()
 
     return {
@@ -229,6 +236,8 @@ async def list_scans(
                 "duration_s":     s.duration_s,
                 "started_by":     s.started_by,
                 "error_msg":      s.error_msg,
+                "client_id":      str(s.client_id) if s.client_id else None,
+                "client_name":    s.client.name if s.client else None,
                 "created_at":     s.created_at.isoformat() if s.created_at else None,
             }
             for s in scans
@@ -261,6 +270,8 @@ async def get_scan(
         "started_by":     scan.started_by,
         "error_msg":      scan.error_msg,
         "raw_output":     scan.raw_output,
+        "client_id":      str(scan.client_id) if scan.client_id else None,
+        "client_name":    scan.client.name if scan.client else None,
         "created_at":     scan.created_at.isoformat() if scan.created_at else None,
     }
 

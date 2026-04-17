@@ -7,7 +7,7 @@ Tabelas:
 """
 from sqlalchemy import (
     Column, String, Text, Integer, Float,
-    ForeignKey, Index, Enum as SAEnum
+    ForeignKey, Index, Enum as SAEnum, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -47,6 +47,9 @@ class VulnScan(Base, UUIDMixin, TimestampMixin):
     scanner     = Column(SAEnum(ScannerType, values_callable=lambda x: [e.value for e in x]), nullable=False, default=ScannerType.NMAP)
     status      = Column(SAEnum(ScanStatus, values_callable=lambda x: [e.value for e in x]), nullable=False, default=ScanStatus.PENDING)
 
+    # Associação com cliente
+    client_id   = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
+
     # Opções de varredura
     scan_options = Column(JSONB, nullable=True)          # ex: {"ports": "1-1000", "timing": "T4"}
 
@@ -66,12 +69,14 @@ class VulnScan(Base, UUIDMixin, TimestampMixin):
     started_by  = Column(String(200), nullable=True)
 
     # Relacionamentos
+    client = relationship("Client", foreign_keys=[client_id])
     findings = relationship("VulnFinding", back_populates="scan",
                             cascade="all, delete-orphan", lazy="dynamic")
 
     __table_args__ = (
         Index("ix_vuln_scans_status", "status"),
         Index("ix_vuln_scans_scanner", "scanner"),
+        Index("ix_vuln_scans_client_id", "client_id"),
         Index("ix_vuln_scans_created_at", "created_at"),
     )
 

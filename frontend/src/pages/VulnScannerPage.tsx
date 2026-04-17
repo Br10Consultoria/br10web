@@ -84,6 +84,7 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
     name: '',
     target: '',
     scanner: 'nmap' as 'nmap' | 'openvas',
+    client_id: '',
     scan_type: 'quick',
     ports: '',
     timing: 'T4',
@@ -94,6 +95,7 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const [loading, setLoading] = useState(false)
   const [openvasAvailable, setOpenvasAvailable] = useState<boolean | null>(null)
   const [scanTypes, setScanTypes] = useState<{value: string; label: string; description: string}[]>([])
+  const [clients, setClients] = useState<{id: string; name: string}[]>([])
 
   useEffect(() => {
     api.get('/vuln-scanner/openvas/status')
@@ -115,6 +117,10 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
         { value: 'smb',   label: 'SMB/Windows', description: 'Varredura SMB com scripts Windows' },
         { value: 'custom',label: 'Personalizado', description: 'Defina portas e opções manualmente' },
       ]))
+    // Carregar lista de clientes
+    api.get('/clients')
+      .then(r => setClients(Array.isArray(r.data) ? r.data : r.data.data || []))
+      .catch(() => setClients([]))
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -160,6 +166,21 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
               placeholder="Ex: Varredura Rede Cliente X"
               className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             />
+          </div>
+
+          {/* Cliente */}
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Cliente (opcional)</label>
+            <select
+              value={form.client_id}
+              onChange={e => setForm(f => ({ ...f, client_id: e.target.value }))}
+              className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+            >
+              <option value="">-- Sem cliente --</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
           </div>
 
           {/* Alvo */}
@@ -589,12 +610,15 @@ export default function VulnScannerPage() {
   const [selectedScan, setSelectedScan] = useState<Scan | null>(null)
   const [filterScanner, setFilterScanner] = useState<string>('all')
   const [filterStatus, setFilterStatus] = useState<string>('all')
+  const [filterClient, setFilterClient] = useState<string>('all')
+  const [clients, setClients] = useState<{id: string; name: string}[]>([])
 
   const fetchScans = useCallback(async () => {
     try {
       const params: Record<string, string> = {}
       if (filterScanner !== 'all') params.scanner = filterScanner
       if (filterStatus !== 'all') params.status = filterStatus
+      if (filterClient !== 'all') params.client_id = filterClient
       const resp = await api.get('/vuln-scanner/scans', { params })
       setScans(resp.data.items || [])
       // Atualizar scan selecionado se estiver rodando
@@ -607,7 +631,14 @@ export default function VulnScannerPage() {
     } finally {
       setLoading(false)
     }
-  }, [filterScanner, filterStatus, selectedScan?.id])
+  }, [filterScanner, filterStatus, filterClient, selectedScan?.id])
+
+  // Carregar clientes na inicialização
+  useEffect(() => {
+    api.get('/clients')
+      .then(r => setClients(Array.isArray(r.data) ? r.data : r.data.data || []))
+      .catch(() => setClients([]))
+  }, [])
 
   useEffect(() => {
     fetchScans()
@@ -707,6 +738,16 @@ export default function VulnScannerPage() {
               <option value="completed">Concluído</option>
               <option value="failed">Falhou</option>
             </select>
+            <select
+              value={filterClient}
+              onChange={e => setFilterClient(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-white"
+            >
+              <option value="all">Todos os clientes</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
           </div>
 
           {/* Lista */}
@@ -738,6 +779,9 @@ export default function VulnScannerPage() {
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-white truncate">{scan.name}</p>
                         <p className="text-xs text-gray-400 font-mono truncate">{scan.target}</p>
+                        {scan.client_name && (
+                          <p className="text-xs text-blue-400 mt-0.5">Cliente: {scan.client_name}</p>
+                        )}
                       </div>
                       <button
                         onClick={e => deleteScan(scan.id, e)}
