@@ -243,7 +243,10 @@ async def list_scans(
             }
             for s in scans
         ],
-   @router.get("/scans/{scan_id}", summary="Detalhes de uma varredura")
+    }
+
+
+@router.get("/scans/{scan_id}", summary="Detalhes de uma varredura")
 async def get_scan_details(
     scan_id: str,
     db: AsyncSession = Depends(get_db),
