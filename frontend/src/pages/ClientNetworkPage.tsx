@@ -776,17 +776,17 @@ export default function ClientNetworkPage() {
                   />
                 ))}
               </div>
+            )}
 
-              {editingDevice && (
-                <DeviceFormModal
-                  device={editingDevice}
-                  onClose={() => setEditingDevice(null)}
-                  onSuccess={() => {
-                    setEditingDevice(null)
-                    refetchNetwork()
-                  }}
-                />
-              )}
+            {editingDevice && (
+              <DeviceFormModal
+                device={editingDevice}
+                onClose={() => setEditingDevice(null)}
+                onSuccess={() => {
+                  setEditingDevice(null)
+                  refetchNetwork()
+                }}
+              />
             )}
           </div>
         ) : null}
