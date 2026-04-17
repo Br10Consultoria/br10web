@@ -24,17 +24,48 @@ export function useInactivityTimeout() {
   const logoutTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const warnedRef       = useRef(false)
+  // Controle para evitar múltiplos logouts simultâneos
+  const isLoggingOutRef = useRef(false)
 
   const clearTimers = useCallback(() => {
     if (logoutTimerRef.current)  clearTimeout(logoutTimerRef.current)
     if (warningTimerRef.current) clearTimeout(warningTimerRef.current)
+    logoutTimerRef.current  = null
+    warningTimerRef.current = null
   }, [])
 
   const doLogout = useCallback(() => {
+    if (isLoggingOutRef.current) return
+    isLoggingOutRef.current = true
+
     toast.dismiss(WARNING_TOAST_ID)
+
+    // Limpar estado de autenticação
     logout()
-    // Redirecionar para login — sem depender de useNavigate (pode estar fora do router)
-    window.location.href = '/login'
+
+    // Limpar sessionStorage explicitamente para garantir estado limpo
+    sessionStorage.removeItem('access_token')
+    sessionStorage.removeItem('refresh_token')
+    sessionStorage.removeItem('br10-auth')
+
+    // Exibir mensagem antes de redirecionar
+    toast('Sessão encerrada por inatividade.', {
+      id: 'inactivity-logout',
+      duration: 3000,
+      icon: '⏱️',
+      style: {
+        background: '#1e3a5f',
+        color: '#bfdbfe',
+        border: '1px solid #3b82f6',
+        borderRadius: '0.75rem',
+        fontSize: '0.875rem',
+      },
+    })
+
+    setTimeout(() => {
+      isLoggingOutRef.current = false
+      window.location.href = '/login'
+    }, 1200)
   }, [logout])
 
   const resetTimers = useCallback(() => {
@@ -48,18 +79,12 @@ export function useInactivityTimeout() {
       warnedRef.current = false
     }
 
-    // Agendar aviso (aos 4 minutos)
+    // Agendar aviso (aos 9 minutos)
     warningTimerRef.current = setTimeout(() => {
       warnedRef.current = true
       toast(
-        (t) => {
-          // Usar o ID do toast para poder dispensá-lo depois
-          t.id = WARNING_TOAST_ID
-          return (
-            `Sua sessão expirará em 1 minuto por inatividade. ` +
-            `Mova o mouse ou pressione qualquer tecla para continuar.`
-          ) as any
-        },
+        `Sua sessão expirará em 1 minuto por inatividade. ` +
+        `Mova o mouse ou pressione qualquer tecla para continuar.`,
         {
           id: WARNING_TOAST_ID,
           duration: WARNING_BEFORE_MS,
@@ -76,7 +101,7 @@ export function useInactivityTimeout() {
       )
     }, INACTIVITY_TIMEOUT_MS - WARNING_BEFORE_MS)
 
-    // Agendar logout (aos 5 minutos)
+    // Agendar logout (aos 10 minutos)
     logoutTimerRef.current = setTimeout(() => {
       doLogout()
     }, INACTIVITY_TIMEOUT_MS)
@@ -85,6 +110,7 @@ export function useInactivityTimeout() {
   useEffect(() => {
     if (!isAuthenticated) {
       clearTimers()
+      warnedRef.current = false
       return
     }
 

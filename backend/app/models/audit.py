@@ -28,6 +28,10 @@ class AuditAction(str, enum.Enum):
     TWO_FA_ENABLED = "2fa_enabled"
     TWO_FA_DISABLED = "2fa_disabled"
 
+    # ── Sessão ────────────────────────────────────────────────────────────────
+    SESSION_EXPIRED = "session_expired"
+    TOKEN_REFRESH_FAILED = "token_refresh_failed"
+
     # ── Dispositivos ──────────────────────────────────────────────────────────
     DEVICE_CREATED = "device_created"
     DEVICE_UPDATED = "device_updated"

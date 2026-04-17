@@ -1,4 +1,5 @@
 import axios from 'axios'
+import toast from 'react-hot-toast'
 import { useAuthStore } from '../store/authStore'
 
 const api = axios.create({
@@ -9,7 +10,41 @@ const api = axios.create({
   },
 })
 
-// Request interceptor - adiciona token
+// ─── Controle de logout em andamento ─────────────────────────────────────────
+// Evita múltiplos toasts e redirecionamentos simultâneos quando várias
+// requisições falham ao mesmo tempo com 401.
+let isLoggingOut = false
+
+function triggerSessionExpired() {
+  if (isLoggingOut) return
+  isLoggingOut = true
+
+  const { logout } = useAuthStore.getState()
+
+  // Limpar estado de autenticação imediatamente
+  logout()
+
+  // Exibir mensagem visível ao usuário
+  toast.error('Sua sessão expirou. Faça login novamente.', {
+    id: 'session-expired',
+    duration: 4000,
+    icon: '🔒',
+    style: {
+      background: '#7f1d1d',
+      color: '#fee2e2',
+      border: '1px solid #ef4444',
+      borderRadius: '0.75rem',
+    },
+  })
+
+  // Redirecionar após breve delay para o toast ser visto
+  setTimeout(() => {
+    isLoggingOut = false
+    window.location.href = '/login'
+  }, 1500)
+}
+
+// ─── Request interceptor ──────────────────────────────────────────────────────
 // Usa o store como fonte primária; cai para sessionStorage quando o zustand/persist
 // ainda não hidratou (ex: chamadas feitas no mount via useEffect antes da hidratação).
 api.interceptors.request.use(
@@ -24,16 +59,21 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// Response interceptor - refresh token automático
+// ─── Response interceptor — refresh token automático ─────────────────────────
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Não tentar refresh para o próprio endpoint de refresh ou login
+    const isAuthEndpoint =
+      originalRequest?.url?.includes('/auth/refresh') ||
+      originalRequest?.url?.includes('/auth/login')
+
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true
 
-      const { refreshToken, setAuth, logout, user } = useAuthStore.getState()
+      const { refreshToken, setAuth, user } = useAuthStore.getState()
 
       if (refreshToken) {
         try {
@@ -49,12 +89,12 @@ api.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${access_token}`
           return api(originalRequest)
         } catch {
-          logout()
-          window.location.href = '/login'
+          // Refresh falhou — sessão definitivamente expirada
+          triggerSessionExpired()
         }
       } else {
-        logout()
-        window.location.href = '/login'
+        // Sem refresh token — sessão expirada
+        triggerSessionExpired()
       }
     }
 

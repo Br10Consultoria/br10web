@@ -196,12 +196,23 @@ async def login(
 
 @router.post("/refresh", response_model=LoginResponse)
 async def refresh_token(
+    request: Request,
     data: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """Renova access token usando refresh token."""
+    client_ip = request.client.host if request.client else "unknown"
+
     payload = decode_token(data.refresh_token)
     if not payload or payload.get("type") != "refresh":
+        # Registrar falha de renovação de token na auditoria
+        await log_audit(
+            db,
+            action=AuditAction.TOKEN_REFRESH_FAILED,
+            description="Refresh token inválido ou expirado — sessão encerrada",
+            ip_address=client_ip,
+            status="failure",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token inválido ou expirado",
@@ -212,6 +223,13 @@ async def refresh_token(
     user = result.scalar_one_or_none()
 
     if not user:
+        await log_audit(
+            db,
+            action=AuditAction.TOKEN_REFRESH_FAILED,
+            description=f"Refresh token rejeitado: usuário {user_id} não encontrado ou inativo",
+            ip_address=client_ip,
+            status="failure",
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário não encontrado")
 
     access_token = create_access_token(
@@ -219,6 +237,17 @@ async def refresh_token(
         extra_claims={"role": user.role.value, "username": user.username},
     )
     new_refresh_token = create_refresh_token(subject=str(user.id))
+
+    # Registrar renovação bem-sucedida
+    await log_audit(
+        db,
+        action=AuditAction.LOGIN,
+        user_id=user.id,
+        description=f"Token renovado com sucesso: {user.username}",
+        ip_address=client_ip,
+        status="success",
+        extra_data={"event": "token_refresh"},
+    )
 
     return LoginResponse(
         access_token=access_token,
