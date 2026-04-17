@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.api.v1.auth import get_current_user
@@ -199,7 +200,7 @@ async def list_scans(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = select(VulnScan).order_by(VulnScan.created_at.desc())
+    q = select(VulnScan).options(selectinload(VulnScan.client)).order_by(VulnScan.created_at.desc())
     if scanner:
         q = q.where(VulnScan.scanner == scanner)
     if status:
@@ -242,17 +243,18 @@ async def list_scans(
             }
             for s in scans
         ],
-    }
-
-
-@router.get("/scans/{scan_id}", summary="Detalhes de uma varredura")
-async def get_scan(
-    scan_id: UUID,
+   @router.get("/scans/{scan_id}", summary="Detalhes de uma varredura")
+async def get_scan_details(
+    scan_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(VulnScan).where(VulnScan.id == scan_id))
-    scan   = result.scalar_one_or_none()
+    result = await db.execute(
+        select(VulnScan)
+        .options(selectinload(VulnScan.client))
+        .where(VulnScan.id == scan_id)
+    )
+    scan = result.scalar_one_or_none()
     if not scan:
         raise HTTPException(status_code=404, detail="Varredura não encontrada")
 
