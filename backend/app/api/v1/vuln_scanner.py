@@ -1,6 +1,15 @@
 """
 BR10 NetManager - Vulnerability Scanner API
 Endpoints para execução de varreduras Nmap e OpenVAS, listagem de resultados e geração de PDF.
+
+Execução em background:
+  Os scans são iniciados com asyncio.create_task() diretamente no event loop do uvicorn,
+  garantindo que continuem em execução mesmo que a conexão HTTP que disparou o scan seja
+  encerrada. Isso é diferente do FastAPI BackgroundTasks, que pode ser cancelado se o
+  worker reiniciar durante uma requisição longa.
+
+  Para sobreviver a reinicializações do container, use um worker externo (Celery + Redis)
+  — veja a documentação em scripts/install-celery-worker.md.
 """
 import asyncio
 import logging
@@ -9,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, delete, func
@@ -55,14 +64,19 @@ class StartScanRequest(BaseModel):
     extra_args: Optional[str] = None
     # Opções OpenVAS
     openvas_config: str = "full"         # full | fast | UUID
-    # Geral
-    timeout_s: int = 600
+    # Geral — padrão 3600s (1h) para suportar redes /24
+    timeout_s: int = 3600
 
 
 # ─── Background task ──────────────────────────────────────────────────────────
 
 async def _execute_scan(scan_id: str, request: StartScanRequest):
-    """Executa a varredura em background e salva resultados no banco."""
+    """
+    Executa a varredura em background e salva resultados no banco.
+
+    Usa asyncio.create_task() para rodar desvinculado da requisição HTTP,
+    garantindo que o scan continue mesmo que o cliente desconecte.
+    """
     from app.core.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
@@ -75,23 +89,24 @@ async def _execute_scan(scan_id: str, request: StartScanRequest):
 
             scan.status = ScanStatus.RUNNING
             await db.commit()
+            logger.info(f"[vuln-scanner] Scan {scan_id} iniciado: {request.target} via {request.scanner.value.upper()}")
 
             # Executar scanner
             if request.scanner == ScannerType.NMAP:
                 options = {
-                    "scan_type": request.scan_type,
-                    "ports": request.ports or "",
-                    "timing": request.timing,
+                    "scan_type":    request.scan_type,
+                    "ports":        request.ports or "",
+                    "timing":       request.timing,
                     "os_detection": request.os_detection,
-                    "scripts": request.scripts or [],
-                    "extra_args": request.extra_args or "",
-                    "timeout_s": request.timeout_s,
+                    "scripts":      request.scripts or [],
+                    "extra_args":   request.extra_args or "",
+                    "timeout_s":    request.timeout_s,
                 }
                 scan_result = await run_nmap_scan(request.target, options)
             else:
                 options = {
                     "scan_config": request.openvas_config,
-                    "timeout_s": request.timeout_s,
+                    "timeout_s":   request.timeout_s,
                 }
                 scan_result = await run_openvas_scan(request.target, options)
 
@@ -131,15 +146,22 @@ async def _execute_scan(scan_id: str, request: StartScanRequest):
                         extra           = f.get("extra"),
                     )
                     db.add(finding)
+
+                logger.info(
+                    f"[vuln-scanner] Scan {scan_id} concluído: "
+                    f"{scan.hosts_up} hosts, {scan.total_findings} findings, "
+                    f"{scan.duration_s:.0f}s"
+                )
             else:
                 scan.status    = ScanStatus.FAILED
                 scan.error_msg = scan_result.get("error", "Erro desconhecido")
                 scan.duration_s = scan_result.get("duration_s")
+                logger.warning(f"[vuln-scanner] Scan {scan_id} falhou: {scan.error_msg}")
 
             await db.commit()
 
         except Exception as e:
-            logger.error(f"Erro ao executar varredura {scan_id}: {e}", exc_info=True)
+            logger.error(f"[vuln-scanner] Erro crítico no scan {scan_id}: {e}", exc_info=True)
             async with AsyncSessionLocal() as db2:
                 result3 = await db2.execute(select(VulnScan).where(VulnScan.id == scan_id))
                 scan = result3.scalar_one_or_none()
@@ -154,11 +176,15 @@ async def _execute_scan(scan_id: str, request: StartScanRequest):
 @router.post("/scans", summary="Iniciar nova varredura")
 async def start_scan(
     req: StartScanRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Cria um registro de varredura e inicia execução em background."""
+    """
+    Cria um registro de varredura e inicia execução em background via asyncio.create_task().
+
+    O scan continua rodando mesmo que a conexão HTTP seja encerrada ou o cliente
+    navegue para outra página. O status pode ser consultado via GET /scans/{id}.
+    """
     scan = VulnScan(
         name        = req.name,
         target      = req.target,
@@ -181,12 +207,70 @@ async def start_scan(
     await db.commit()
     await db.refresh(scan)
 
-    background_tasks.add_task(_execute_scan, str(scan.id), req)
+    # asyncio.create_task() garante execução independente da requisição HTTP
+    # O scan continua mesmo que o cliente desconecte ou navegue para outra página
+    asyncio.create_task(_execute_scan(str(scan.id), req))
 
     return {
         "id":      str(scan.id),
         "status":  scan.status.value,
-        "message": f"Varredura '{req.name}' iniciada com {req.scanner.value.upper()}",
+        "message": f"Varredura '{req.name}' iniciada com {req.scanner.value.upper()} (background)",
+    }
+
+
+@router.post("/scans/{scan_id}/rerun", summary="Refazer varredura com as mesmas configurações")
+async def rerun_scan(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Cria uma nova varredura com as mesmas configurações de uma varredura anterior.
+    Útil para repetir scans que falharam ou para comparar resultados ao longo do tempo.
+    """
+    result = await db.execute(
+        select(VulnScan).options(selectinload(VulnScan.client)).where(VulnScan.id == scan_id)
+    )
+    original = result.scalar_one_or_none()
+    if not original:
+        raise HTTPException(status_code=404, detail="Varredura original não encontrada")
+
+    opts = original.scan_options or {}
+
+    req = StartScanRequest(
+        name           = f"{original.name} (nova)",
+        target         = original.target,
+        scanner        = original.scanner,
+        client_id      = str(original.client_id) if original.client_id else None,
+        scan_type      = opts.get("scan_type", "quick"),
+        ports          = opts.get("ports"),
+        timing         = opts.get("timing", "T4"),
+        os_detection   = opts.get("os_detection", False),
+        scripts        = opts.get("scripts"),
+        extra_args     = opts.get("extra_args"),
+        openvas_config = opts.get("openvas_config", "full"),
+        timeout_s      = opts.get("timeout_s", 3600),
+    )
+
+    new_scan = VulnScan(
+        name         = req.name,
+        target       = req.target,
+        scanner      = req.scanner,
+        client_id    = req.client_id,
+        status       = ScanStatus.PENDING,
+        scan_options = opts,
+        started_by   = current_user.username,
+    )
+    db.add(new_scan)
+    await db.commit()
+    await db.refresh(new_scan)
+
+    asyncio.create_task(_execute_scan(str(new_scan.id), req))
+
+    return {
+        "id":      str(new_scan.id),
+        "status":  new_scan.status.value,
+        "message": f"Varredura '{req.name}' reiniciada com {req.scanner.value.upper()}",
     }
 
 
@@ -237,6 +321,7 @@ async def list_scans(
                 "duration_s":     s.duration_s,
                 "started_by":     s.started_by,
                 "error_msg":      s.error_msg,
+                "scan_options":   s.scan_options,
                 "client_id":      str(s.client_id) if s.client_id else None,
                 "client_name":    s.client.name if s.client else None,
                 "created_at":     s.created_at.isoformat() if s.created_at else None,
@@ -302,10 +387,6 @@ async def get_findings(
     if host:
         q = q.where(VulnFinding.host == host)
 
-    # Ordenar por severidade (crítico primeiro) e porta
-    severity_order = {
-        "critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4
-    }
     q = q.order_by(VulnFinding.host, VulnFinding.port)
     q = q.offset(offset).limit(limit)
 
@@ -356,7 +437,6 @@ async def generate_pdf_report(
     current_user: User = Depends(get_current_user),
 ):
     """Gera relatório PDF completo da varredura para download."""
-    # Buscar scan
     scan_res = await db.execute(select(VulnScan).where(VulnScan.id == scan_id))
     scan     = scan_res.scalar_one_or_none()
     if not scan:
@@ -364,17 +444,14 @@ async def generate_pdf_report(
     if scan.status != ScanStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Varredura ainda não concluída")
 
-    # Buscar findings
     findings_res = await db.execute(
         select(VulnFinding).where(VulnFinding.scan_id == scan_id)
         .order_by(VulnFinding.host, VulnFinding.port)
     )
     findings = findings_res.scalars().all()
 
-    # Gerar HTML para o PDF
     html = _build_pdf_html(scan, findings)
 
-    # Converter para PDF com WeasyPrint
     try:
         from weasyprint import HTML as WeasyprintHTML
         pdf_bytes = WeasyprintHTML(string=html).write_pdf()
@@ -407,20 +484,17 @@ def _build_pdf_html(scan: VulnScan, findings: list) -> str:
         "info":     "Info",
     }
 
-    # Contagem por severidade
     sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for f in findings:
         sev = f.severity.value if f.severity else "info"
         sev_counts[sev] = sev_counts.get(sev, 0) + 1
 
-    # Agrupar por host
     hosts: dict = {}
     for f in findings:
         if f.host not in hosts:
             hosts[f.host] = []
         hosts[f.host].append(f)
 
-    # Tabela de findings
     findings_html = ""
     for host_ip, host_findings in hosts.items():
         hostname = host_findings[0].hostname or ""

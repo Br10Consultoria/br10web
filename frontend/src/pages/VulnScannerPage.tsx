@@ -10,7 +10,7 @@ import {
   Shield, ShieldAlert, ShieldX, ShieldCheck, Play, Trash2,
   Download, RefreshCw, Plus, X, ChevronDown, ChevronUp,
   Loader2, AlertTriangle, CheckCircle, Clock, Server,
-  Search, Filter, FileText, Zap, Globe, Lock
+  Search, FileText, Zap, Lock, RotateCcw
 } from 'lucide-react'
 import api from '../utils/api'
 import toast from 'react-hot-toast'
@@ -28,6 +28,7 @@ interface Scan {
   duration_s: number | null
   started_by: string
   error_msg: string | null
+  scan_options?: Record<string, any>
   created_at: string
 }
 
@@ -78,24 +79,34 @@ function formatDate(iso: string): string {
   })
 }
 
-// ─── Modal de Nova Varredura ──────────────────────────────────────────────────
-function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+// ─── Modal de Nova/Refazer Varredura ──────────────────────────────────────────
+function NewScanModal({
+  onClose,
+  onCreated,
+  prefill,
+}: {
+  onClose: () => void
+  onCreated: () => void
+  prefill?: Partial<Scan>
+}) {
   const [form, setForm] = useState({
-    name: '',
-    target: '',
-    scanner: 'nmap' as 'nmap' | 'openvas',
-    client_id: '',
-    scan_type: 'quick',
-    ports: '',
-    timing: 'T4',
-    os_detection: false,
-    openvas_config: 'full',
-    timeout_s: 600,
+    name:           prefill?.name        ?? '',
+    target:         prefill?.target      ?? '',
+    scanner:        (prefill?.scanner    ?? 'nmap') as 'nmap' | 'openvas',
+    client_id:      '',
+    scan_type:      prefill?.scan_options?.scan_type      ?? 'quick',
+    ports:          prefill?.scan_options?.ports          ?? '',
+    timing:         prefill?.scan_options?.timing         ?? 'T4',
+    os_detection:   prefill?.scan_options?.os_detection   ?? false,
+    openvas_config: prefill?.scan_options?.openvas_config ?? 'full',
+    timeout_s:      prefill?.scan_options?.timeout_s      ?? 3600,
   })
   const [loading, setLoading] = useState(false)
   const [openvasAvailable, setOpenvasAvailable] = useState<boolean | null>(null)
   const [scanTypes, setScanTypes] = useState<{value: string; label: string; description: string}[]>([])
   const [clients, setClients] = useState<{id: string; name: string}[]>([])
+
+  const isRerun = !!prefill
 
   useEffect(() => {
     api.get('/vuln-scanner/openvas/status')
@@ -117,7 +128,6 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
         { value: 'smb',   label: 'SMB/Windows', description: 'Varredura SMB com scripts Windows' },
         { value: 'custom',label: 'Personalizado', description: 'Defina portas e opções manualmente' },
       ]))
-    // Carregar lista de clientes
     api.get('/clients')
       .then(r => setClients(Array.isArray(r.data) ? r.data : r.data.data || []))
       .catch(() => setClients([]))
@@ -147,13 +157,24 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg shadow-2xl">
         <div className="flex items-center justify-between p-5 border-b border-gray-700">
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-blue-400" />
-            <h2 className="text-white font-semibold">Nova Varredura</h2>
+            {isRerun
+              ? <RotateCcw className="w-5 h-5 text-orange-400" />
+              : <Shield className="w-5 h-5 text-blue-400" />
+            }
+            <h2 className="text-white font-semibold">
+              {isRerun ? 'Refazer Varredura' : 'Nova Varredura'}
+            </h2>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {isRerun && (
+          <div className="mx-5 mt-4 px-3 py-2 bg-orange-900/20 border border-orange-700/40 rounded-lg text-xs text-orange-300">
+            As configurações da varredura anterior foram preenchidas automaticamente. Você pode alterá-las antes de iniciar.
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           {/* Nome */}
@@ -318,15 +339,25 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
 
           {/* Timeout */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Timeout (segundos)</label>
+            <label className="block text-xs text-gray-400 mb-1">
+              Timeout (segundos)
+              <span className="ml-2 text-gray-500">
+                — atual: {form.timeout_s >= 3600
+                  ? `${(form.timeout_s / 3600).toFixed(0)}h`
+                  : `${Math.floor(form.timeout_s / 60)}min`}
+              </span>
+            </label>
             <input
               type="number"
               value={form.timeout_s}
-              onChange={e => setForm(f => ({ ...f, timeout_s: parseInt(e.target.value) || 600 }))}
+              onChange={e => setForm(f => ({ ...f, timeout_s: parseInt(e.target.value) || 3600 }))}
               min={60}
               max={86400}
               className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-white text-sm"
             />
+            <p className="text-xs text-gray-500 mt-1">
+              Para redes /24 recomenda-se mínimo 3600s (1h). Scans completos podem levar mais.
+            </p>
           </div>
 
           <div className="flex gap-3 pt-2">
@@ -340,10 +371,19 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-white rounded-lg text-sm disabled:opacity-50 ${
+                isRerun
+                  ? 'bg-orange-600 hover:bg-orange-700'
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
             >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              Iniciar Varredura
+              {loading
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : isRerun
+                ? <RotateCcw className="w-4 h-4" />
+                : <Play className="w-4 h-4" />
+              }
+              {isRerun ? 'Refazer Varredura' : 'Iniciar Varredura'}
             </button>
           </div>
         </form>
@@ -353,7 +393,15 @@ function NewScanModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
 }
 
 // ─── Painel de Findings ───────────────────────────────────────────────────────
-function FindingsPanel({ scan }: { scan: Scan }) {
+function FindingsPanel({
+  scan,
+  onRerun,
+  onNewScan,
+}: {
+  scan: Scan
+  onRerun: () => void
+  onNewScan: () => void
+}) {
   const [findings, setFindings] = useState<Finding[]>([])
   const [loading, setLoading] = useState(true)
   const [filterSev, setFilterSev] = useState<string>('all')
@@ -411,26 +459,60 @@ function FindingsPanel({ scan }: { scan: Scan }) {
     }
   }
 
+  // ── Estado: em andamento ────────────────────────────────────────────────────
   if (scan.status === 'pending' || scan.status === 'running') {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-gray-400">
         <Loader2 className="w-8 h-8 animate-spin mb-3 text-blue-400" />
         <p className="text-sm">Varredura em andamento...</p>
         <p className="text-xs mt-1">Os resultados aparecerão aqui ao concluir</p>
+        <p className="text-xs mt-1 text-gray-600">
+          A varredura continua em segundo plano mesmo que você navegue para outra página.
+        </p>
       </div>
     )
   }
 
+  // ── Estado: falhou ──────────────────────────────────────────────────────────
   if (scan.status === 'failed') {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-red-400">
-        <AlertTriangle className="w-8 h-8 mb-3" />
-        <p className="text-sm font-medium">Varredura falhou</p>
-        <p className="text-xs mt-1 text-gray-400">{scan.error_msg}</p>
+      <div className="flex flex-col items-center justify-center py-10 text-red-400 gap-4">
+        <AlertTriangle className="w-10 h-10" />
+        <div className="text-center">
+          <p className="text-sm font-semibold">Varredura falhou</p>
+          <p className="text-xs mt-1 text-gray-400 max-w-sm">{scan.error_msg}</p>
+        </div>
+
+        {/* Ações pós-falha */}
+        <div className="flex gap-3 mt-2">
+          <button
+            onClick={onRerun}
+            className="flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            <RotateCcw className="w-4 h-4" />
+            Refazer com mesmas configurações
+          </button>
+          <button
+            onClick={onNewScan}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Novo Scan
+          </button>
+        </div>
+
+        {/* Dica de timeout */}
+        {scan.error_msg?.toLowerCase().includes('timeout') && (
+          <div className="mt-2 px-4 py-3 bg-yellow-900/20 border border-yellow-700/40 rounded-lg text-xs text-yellow-300 max-w-md text-center">
+            <strong>Dica:</strong> O scan excedeu o tempo limite. Ao refazer, aumente o timeout
+            (recomendado: 3600s para redes /24) ou use um tipo de scan mais rápido (ex: <em>Rápido</em> ou <em>ARP</em>).
+          </div>
+        )}
       </div>
     )
   }
 
+  // ── Estado: concluído ───────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
       {/* Resumo de severidade */}
@@ -463,6 +545,24 @@ function FindingsPanel({ scan }: { scan: Scan }) {
             className="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
           />
         </div>
+        {/* Refazer scan */}
+        <button
+          onClick={onRerun}
+          title="Refazer esta varredura"
+          className="flex items-center gap-2 px-3 py-2 bg-orange-700/70 hover:bg-orange-600 text-white rounded-lg text-sm"
+        >
+          <RotateCcw className="w-4 h-4" />
+          Refazer
+        </button>
+        {/* Novo scan */}
+        <button
+          onClick={onNewScan}
+          title="Iniciar nova varredura"
+          className="flex items-center gap-2 px-3 py-2 bg-blue-700/70 hover:bg-blue-600 text-white rounded-lg text-sm"
+        >
+          <Plus className="w-4 h-4" />
+          Novo
+        </button>
         <button
           onClick={downloadPdf}
           className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-sm"
@@ -607,6 +707,7 @@ export default function VulnScannerPage() {
   const [scans, setScans] = useState<Scan[]>([])
   const [loading, setLoading] = useState(true)
   const [showNewModal, setShowNewModal] = useState(false)
+  const [rerunScan, setRerunScan] = useState<Scan | null>(null)
   const [selectedScan, setSelectedScan] = useState<Scan | null>(null)
   const [filterScanner, setFilterScanner] = useState<string>('all')
   const [filterStatus, setFilterStatus] = useState<string>('all')
@@ -783,12 +884,22 @@ export default function VulnScannerPage() {
                           <p className="text-xs text-blue-400 mt-0.5">Cliente: {scan.client_name}</p>
                         )}
                       </div>
-                      <button
-                        onClick={e => deleteScan(scan.id, e)}
-                        className="p-1 text-gray-600 hover:text-red-400 flex-shrink-0"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {/* Botão de refazer na lista */}
+                        <button
+                          onClick={e => { e.stopPropagation(); setRerunScan(scan) }}
+                          title="Refazer varredura"
+                          className="p-1 text-gray-600 hover:text-orange-400"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={e => deleteScan(scan.id, e)}
+                          className="p-1 text-gray-600 hover:text-red-400"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                     <div className="flex items-center justify-between mt-2">
                       <div className="flex items-center gap-1.5">
@@ -864,7 +975,11 @@ export default function VulnScannerPage() {
               </div>
 
               {/* Findings */}
-              <FindingsPanel scan={selectedScan} />
+              <FindingsPanel
+                scan={selectedScan}
+                onRerun={() => setRerunScan(selectedScan)}
+                onNewScan={() => setShowNewModal(true)}
+              />
             </div>
           )}
         </div>
@@ -875,6 +990,15 @@ export default function VulnScannerPage() {
         <NewScanModal
           onClose={() => setShowNewModal(false)}
           onCreated={fetchScans}
+        />
+      )}
+
+      {/* Modal de refazer varredura */}
+      {rerunScan && (
+        <NewScanModal
+          prefill={rerunScan}
+          onClose={() => setRerunScan(null)}
+          onCreated={() => { fetchScans(); setRerunScan(null) }}
         />
       )}
     </div>
