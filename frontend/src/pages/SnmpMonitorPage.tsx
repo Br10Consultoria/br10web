@@ -556,6 +556,16 @@ function ActionModal({ target, initialObjectId, initialActionType, onClose }: {
 
 // ─── Modal: Consulta PPPoE ───────────────────────────────────────────────────
 
+// Tipos para os dados estruturados da API PPPoE
+type PppoeUser = { session_id: string; username: string; interface: string; ip: string; mac: string }
+type PppoeRawResult = { command: string; output: string; success: boolean; error?: string; total_count?: number; users?: PppoeUser[]; user_count?: number }
+type PppoeResponse = {
+  total_count: number | null
+  users: PppoeUser[]
+  results: PppoeRawResult[]
+  query_type: string
+}
+
 function PppoeModal({ target, interfaceName, onClose }: {
   target: SnmpTarget
   interfaceName: string
@@ -565,14 +575,16 @@ function PppoeModal({ target, interfaceName, onClose }: {
   const [username, setUsername] = useState('')
   const [slot, setSlot] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [results, setResults] = useState<{ command: string; output: string; success: boolean; error?: string }[]>([])
+  const [apiData, setApiData] = useState<PppoeResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [lastMode, setLastMode] = useState<'count' | 'list' | 'username' | null>(null)
+  const [userFilter, setUserFilter] = useState('')
 
   const runQuery = async (queryMode: 'count' | 'list' | 'username') => {
     setLoading(true)
     setError(null)
-    setResults([])
+    setApiData(null)
+    setUserFilter('')
     setMode(queryMode)
     setLastMode(queryMode)
     try {
@@ -584,13 +596,13 @@ function PppoeModal({ target, interfaceName, onClose }: {
         payload.interface = interfaceName
       }
       const res = await api.post(`/snmp/targets/${target.id}/pppoe-query`, payload)
-      const allResults = res.data.results || []
+      const data: PppoeResponse = res.data
+      setApiData(data)
 
-      // Verificar se algum resultado tem erro de Broken pipe ou falha
-      const failedResult = allResults.find((r: { success: boolean; output?: string }) => !r.success)
+      // Verificar falhas nos resultados brutos
+      const failedResult = (data.results || []).find(r => !r.success)
       if (failedResult) {
         const errMsg = failedResult.output || failedResult.error || 'Erro desconhecido'
-        // Enriquecer mensagem de Broken pipe com dica de diagnóstico
         if (errMsg.includes('Broken pipe') || errMsg.includes('Errno 32')) {
           setError(
             `Erro Telnet: Broken pipe — O equipamento fechou a conexão.\n\n` +
@@ -605,19 +617,9 @@ function PppoeModal({ target, interfaceName, onClose }: {
           setError(errMsg)
         }
       }
-
-      // Para mode=count, mostrar apenas o primeiro resultado; para list, mostrar o segundo
-      if (queryMode === 'count') {
-        setResults([allResults[0]].filter(Boolean))
-      } else if (queryMode === 'list') {
-        setResults([allResults[1] || allResults[0]].filter(Boolean))
-      } else {
-        setResults(allResults)
-      }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } }; message?: string }
-      const detail = e?.response?.data?.detail || e?.message || 'Erro ao executar consulta PPPoE'
-      setError(detail)
+      setError(e?.response?.data?.detail || e?.message || 'Erro ao executar consulta PPPoE')
     } finally {
       setLoading(false)
     }
@@ -724,20 +726,109 @@ function PppoeModal({ target, interfaceName, onClose }: {
             </div>
           )}
 
-          {/* Resultados */}
-          {results.length > 0 && results.map((r, i) => (
-            <div key={i} className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-dark-500 font-mono bg-dark-900/60 px-2 py-1 rounded">{r.command}</p>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${
-                  r.success ? 'bg-green-400/10 text-green-400' : 'bg-red-400/10 text-red-400'
-                }`}>{r.success ? 'OK' : 'Erro'}</span>
+          {/* ── Resultado: Total de PPPoE (count) ── */}
+          {!loading && mode === 'count' && apiData?.total_count != null && (
+            <div className="flex flex-col items-center justify-center py-6 gap-2 bg-dark-900/60 border border-dark-700 rounded-xl">
+              <Activity className="w-8 h-8 text-blue-400" />
+              <p className="text-5xl font-bold text-white">{apiData.total_count}</p>
+              <p className="text-sm text-dark-400">sessões PPPoE ativas em <span className="font-mono text-dark-300">{interfaceName}</span></p>
+              <p className="text-xs text-dark-500 mt-1">Slot {slot} • {apiData.results[0]?.command}</p>
+            </div>
+          )}
+
+          {/* ── Resultado: Listar PPPoE Online (tabela) ── */}
+          {!loading && mode === 'list' && apiData && (
+            <div className="space-y-3">
+              {/* Cabeçalho com contagem e filtro */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-green-400" />
+                  <span className="text-sm font-medium text-white">
+                    {apiData.users.length > 0
+                      ? `${apiData.users.length} usuário${apiData.users.length !== 1 ? 's' : ''} online`
+                      : 'Nenhum usuário encontrado'}
+                  </span>
+                  {apiData.total_count != null && apiData.users.length !== apiData.total_count && (
+                    <span className="text-xs text-dark-500">(total: {apiData.total_count})</span>
+                  )}
+                </div>
+                {apiData.users.length > 0 && (
+                  <input
+                    className="input text-xs py-1 px-2 w-40"
+                    placeholder="Filtrar usuário/IP..."
+                    value={userFilter}
+                    onChange={e => setUserFilter(e.target.value)}
+                  />
+                )}
               </div>
-              <pre className="bg-dark-900 border border-dark-700 rounded-lg p-3 text-xs text-dark-200 font-mono whitespace-pre-wrap overflow-x-auto max-h-64 overflow-y-auto">
-                {r.output || '(sem saída)'}
+
+              {/* Tabela de usuários */}
+              {apiData.users.length > 0 ? (
+                <div className="overflow-x-auto rounded-xl border border-dark-700">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-dark-900/80 text-dark-400 text-left">
+                        <th className="px-3 py-2 font-medium">ID</th>
+                        <th className="px-3 py-2 font-medium">Usuário</th>
+                        <th className="px-3 py-2 font-medium">IP</th>
+                        <th className="px-3 py-2 font-medium">MAC</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {apiData.users
+                        .filter(u =>
+                          !userFilter.trim() ||
+                          u.username.toLowerCase().includes(userFilter.toLowerCase()) ||
+                          u.ip.includes(userFilter)
+                        )
+                        .map((u, i) => (
+                          <tr key={i} className={`border-t border-dark-700/50 hover:bg-dark-700/30 transition-colors ${
+                            i % 2 === 0 ? 'bg-dark-800/40' : 'bg-dark-900/20'
+                          }`}>
+                            <td className="px-3 py-2 text-dark-500 font-mono">{u.session_id}</td>
+                            <td className="px-3 py-2 text-white font-medium">{u.username}</td>
+                            <td className="px-3 py-2 text-blue-300 font-mono">{u.ip}</td>
+                            <td className="px-3 py-2 text-dark-400 font-mono">{u.mac}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                !error && (
+                  <div className="text-center py-6 text-dark-500 text-sm">
+                    Nenhuma sessão PPPoE ativa nesta interface.
+                  </div>
+                )
+              )}
+
+              {/* Saída bruta (collapsible) */}
+              <details className="group">
+                <summary className="text-xs text-dark-500 cursor-pointer hover:text-dark-300 flex items-center gap-1">
+                  <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
+                  Ver saída bruta do equipamento
+                </summary>
+                <pre className="mt-2 bg-dark-900 border border-dark-700 rounded-lg p-3 text-xs text-dark-400 font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
+                  {apiData.results.find(r => !r.command.includes('| count'))?.output || '(sem saída)'}
+                </pre>
+              </details>
+            </div>
+          )}
+
+          {/* ── Resultado: Consulta por Usuário (verbose) ── */}
+          {!loading && mode === 'username' && apiData && apiData.results.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-dark-500 font-mono bg-dark-900/60 px-2 py-1 rounded">{apiData.results[0].command}</p>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  apiData.results[0].success ? 'bg-green-400/10 text-green-400' : 'bg-red-400/10 text-red-400'
+                }`}>{apiData.results[0].success ? 'OK' : 'Erro'}</span>
+              </div>
+              <pre className="bg-dark-900 border border-dark-700 rounded-lg p-3 text-xs text-dark-200 font-mono whitespace-pre-wrap overflow-x-auto max-h-80 overflow-y-auto">
+                {apiData.results[0].output || '(sem saída)'}
               </pre>
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>

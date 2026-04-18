@@ -978,6 +978,50 @@ async def pppoe_query(
                 "error": str(e),
             })
 
+    # ── Pós-processamento dos resultados ─────────────────────────────────────
+    # Extrair 'Total lines: N' do resultado count
+    total_count: Optional[int] = None
+    users: list[dict] = []
+
+    for r in results:
+        raw = r.get("output", "")
+        cmd = r.get("command", "")
+
+        # Resultado do comando count: extrair apenas o número de 'Total lines: N'
+        if "| count" in cmd:
+            m = re.search(r'Total lines:\s*(\d+)', raw, re.IGNORECASE)
+            if m:
+                total_count = int(m.group(1))
+                r["total_count"] = total_count
+                r["output_summary"] = str(total_count)  # saída limpa para o frontend
+
+        # Resultado do comando de listagem: parsear linhas em estrutura de tabela
+        # Formato Huawei: ID  username  interface  IP  MAC
+        # Ex: "  6   edmarrocha   GE0/1/9.220   100.64.69.225   e04b-a698-0781"
+        elif "| count" not in cmd and query_type == "interface":
+            parsed_users = []
+            for line in raw.splitlines():
+                line = line.strip()
+                # Ignorar linhas de cabeçalho, info e separadores
+                if not line:
+                    continue
+                if line.startswith("Info:") or line.startswith("----") or line.startswith("User") or line.startswith("Total"):
+                    continue
+                # Linha de dados: começa com número (ID de sessão)
+                parts = line.split()
+                if len(parts) >= 4 and parts[0].isdigit():
+                    parsed_users.append({
+                        "session_id": parts[0],
+                        "username":   parts[1] if len(parts) > 1 else "",
+                        "interface":  parts[2] if len(parts) > 2 else "",
+                        "ip":         parts[3] if len(parts) > 3 else "",
+                        "mac":        parts[4] if len(parts) > 4 else "",
+                    })
+            if parsed_users:
+                users = parsed_users
+                r["users"] = parsed_users
+                r["user_count"] = len(parsed_users)
+
     return {
         "target_id": str(target_id),
         "target_name": target.name,
@@ -985,5 +1029,7 @@ async def pppoe_query(
         "device_ip": device.management_ip,
         "query_type": query_type,
         "query_label": query_label,
+        "total_count": total_count,
+        "users": users,
         "results": results,
     }
