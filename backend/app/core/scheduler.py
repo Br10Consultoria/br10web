@@ -161,6 +161,8 @@ async def run_device_status_check():
             online_count = 0
             offline_count = 0
             updated_count = 0
+            # Coletar mudanças de status para alertas Telegram após commit
+            status_changes: list = []  # [(name, ip, client_name, went_online)]
 
             for device, is_online in zip(devices, results):
                 if isinstance(is_online, Exception):
@@ -178,6 +180,9 @@ async def run_device_status_check():
                         f"[Scheduler] {device.name} ({device.management_ip}): "
                         f"{old_status} → {new_status.value}"
                     )
+                    # Guardar para alerta Telegram
+                    client_name = getattr(device, 'client_name', None)
+                    status_changes.append((device.name, device.management_ip, client_name, is_online))
                 elif is_online:
                     # Atualiza last_seen mesmo sem mudança de status
                     device.last_seen = datetime.now(timezone.utc)
@@ -188,6 +193,18 @@ async def run_device_status_check():
                     offline_count += 1
 
             await db.commit()
+
+            # Enviar alertas Telegram para mudanças de status (sem bloquear)
+            if status_changes:
+                try:
+                    from app.services.telegram_notify import notify_device_down, notify_device_up
+                    for dev_name, dev_ip, client_name, went_online in status_changes:
+                        if went_online:
+                            await notify_device_up(db, dev_name, dev_ip, client_name)
+                        else:
+                            await notify_device_down(db, dev_name, dev_ip, client_name)
+                except Exception as tg_err:
+                    logger.warning(f"[Scheduler] Erro ao enviar alertas Telegram de status: {tg_err}")
 
             elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             
