@@ -185,11 +185,14 @@ async def start_scan(
     O scan continua rodando mesmo que a conexão HTTP seja encerrada ou o cliente
     navegue para outra página. O status pode ser consultado via GET /scans/{id}.
     """
+    # Normalizar client_id: string vazia ou 'null' deve virar None para evitar erro de UUID inválido
+    client_id_value = req.client_id if req.client_id and req.client_id.strip() else None
+
     scan = VulnScan(
         name        = req.name,
         target      = req.target,
         scanner     = req.scanner,
-        client_id   = req.client_id,
+        client_id   = client_id_value,
         status      = ScanStatus.PENDING,
         scan_options = {
             "scan_type":       req.scan_type,

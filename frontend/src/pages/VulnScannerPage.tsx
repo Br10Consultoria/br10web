@@ -141,7 +141,14 @@ function NewScanModal({
     }
     setLoading(true)
     try {
-      await api.post('/vuln-scanner/scans', form)
+      // Normalizar client_id: string vazia deve ser null (UUID inválido no banco)
+      const payload = {
+        ...form,
+        client_id: form.client_id && form.client_id.trim() ? form.client_id : null,
+        ports:     form.ports && form.ports.trim()     ? form.ports     : null,
+        extra_args: form.extra_args && (form as any).extra_args?.trim() ? (form as any).extra_args : null,
+      }
+      await api.post('/vuln-scanner/scans', payload)
       toast.success(`Varredura "${form.name}" iniciada!`)
       onCreated()
       onClose()
