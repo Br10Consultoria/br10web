@@ -8,7 +8,7 @@ import {
   ToggleLeft, ToggleRight, AlertTriangle, Server
 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { authApi, api } from '../utils/api'
+import api, { authApi } from '../utils/api'
 import { useAuthStore } from '../store/authStore'
 
 const passwordSchema = z.object({
