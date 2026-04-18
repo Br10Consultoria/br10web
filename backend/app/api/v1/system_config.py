@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_active_user
+from app.api.v1.auth import get_current_user
 from app.models.system_config import SystemConfig, SYSTEM_CONFIG_DEFAULTS
 from app.models.user import User
 
@@ -66,7 +66,7 @@ async def _ensure_defaults(db: AsyncSession) -> None:
 @router.get("", response_model=List[ConfigResponse])
 async def list_configs(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Lista todas as configurações do sistema."""
     await _ensure_defaults(db)
@@ -86,7 +86,7 @@ async def list_configs(
 @router.get("/raw", response_model=List[ConfigResponse])
 async def list_configs_raw(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Lista todas as configurações sem mascarar tokens (para edição)."""
     await _ensure_defaults(db)
@@ -102,7 +102,7 @@ async def list_configs_raw(
 async def bulk_update_configs(
     payload: ConfigBulkUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Salva múltiplas configurações de uma vez."""
     await _ensure_defaults(db)
@@ -131,7 +131,7 @@ async def update_config(
     key: str,
     payload: ConfigItem,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Atualiza uma configuração específica."""
     result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
@@ -155,7 +155,7 @@ async def update_config(
 @router.post("/telegram/test", response_model=TelegramTestResponse)
 async def test_telegram(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Testa a configuração global de Telegram enviando uma mensagem de teste."""
     from app.services.telegram_notify import test_telegram_global
