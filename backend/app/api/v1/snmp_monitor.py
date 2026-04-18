@@ -717,6 +717,26 @@ async def execute_action(
     db.add(log_entry)
     await db.commit()
 
+    # ── Alerta Telegram para ações críticas ───────────────────────────────────────
+    _critical_actions = {"if_disable", "bgp_disable", "bgp_remove"}
+    if action_type in _critical_actions:
+        try:
+            from app.services.telegram_notify import notify_critical_command
+            await notify_critical_command(
+                db=db,
+                device_name=target.name or target.host,
+                device_ip=target.host,
+                action_type=action_type,
+                object_id=action.object_id,
+                object_name=action.object_name,
+                executed_by=current_user.username,
+                success=bool(result.get("success")),
+                output=result.get("output"),
+                error=result.get("error"),
+            )
+        except Exception as _tg_err:
+            logger.warning(f"[NETCONF] Falha ao enviar alerta Telegram: {_tg_err}")
+
     if not result.get("success"):
         raise HTTPException(
             status_code=500,

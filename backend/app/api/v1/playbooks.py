@@ -1131,6 +1131,27 @@ async def analyze_content(
 
     await db.commit()
     await db.refresh(analysis)
+
+    # ── Alerta Telegram ────────────────────────────────────────────────
+    try:
+        from app.services.telegram_notify import notify_ai_analysis
+        _summary = None
+        if success and result_text:
+            _lines = [l.strip() for l in result_text.split('\n') if l.strip()][:3]
+            _summary = ' '.join(_lines)[:300] if _lines else None
+        await notify_ai_analysis(
+            db=db,
+            analysis_type=req.analysis_type,
+            device_name=req.device_name,
+            status="success" if success else "failed",
+            tokens_used=tokens or 0,
+            duration_s=(duration_ms or 0) / 1000,
+            summary=_summary,
+            error_msg=result_text[:200] if not success else None,
+        )
+    except Exception as _tg_err:
+        logger.warning(f"[AI] Falha ao enviar alerta Telegram: {_tg_err}")
+
     return _analysis_to_dict(analysis)
 
 

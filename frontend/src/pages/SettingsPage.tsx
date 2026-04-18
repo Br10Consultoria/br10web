@@ -44,15 +44,66 @@ const TELEGRAM_KEYS = [
   'telegram_alert_backup_fail',
   'telegram_alert_playbook_ok',
   'telegram_alert_playbook_fail',
+  'telegram_alert_scan_ok',
+  'telegram_alert_scan_fail',
+  'telegram_alert_rpki_invalid',
+  'telegram_alert_rpki_change',
+  'telegram_alert_ai_analysis',
+  'telegram_alert_critical_command',
+  'telegram_alert_login_suspicious',
+  'telegram_alert_login_new_ip',
+]
+
+const ALERT_GROUPS: { label: string; keys: string[] }[] = [
+  {
+    label: 'Monitoramento de Dispositivos',
+    keys: ['telegram_alert_device_down', 'telegram_alert_device_up'],
+  },
+  {
+    label: 'Backups',
+    keys: ['telegram_alert_backup_ok', 'telegram_alert_backup_fail'],
+  },
+  {
+    label: 'Playbooks e Automação',
+    keys: ['telegram_alert_playbook_ok', 'telegram_alert_playbook_fail'],
+  },
+  {
+    label: 'Scanner de Vulnerabilidades (Nmap/OpenVAS)',
+    keys: ['telegram_alert_scan_ok', 'telegram_alert_scan_fail'],
+  },
+  {
+    label: 'Monitor RPKI',
+    keys: ['telegram_alert_rpki_invalid', 'telegram_alert_rpki_change'],
+  },
+  {
+    label: 'Análise de IA',
+    keys: ['telegram_alert_ai_analysis'],
+  },
+  {
+    label: 'Ações Críticas (Desativar porta, remover BGP)',
+    keys: ['telegram_alert_critical_command'],
+  },
+  {
+    label: 'Segurança e Auditoria',
+    keys: ['telegram_alert_login_suspicious', 'telegram_alert_login_new_ip'],
+  },
 ]
 
 const ALERT_LABELS: Record<string, string> = {
-  telegram_alert_device_down:    'Dispositivo ficou offline',
-  telegram_alert_device_up:      'Dispositivo voltou online',
-  telegram_alert_backup_ok:      'Backup concluído com sucesso',
-  telegram_alert_backup_fail:    'Falha no backup',
-  telegram_alert_playbook_ok:    'Playbook executado com sucesso',
-  telegram_alert_playbook_fail:  'Falha na execução de playbook',
+  telegram_alert_device_down:       'Dispositivo ficou offline',
+  telegram_alert_device_up:         'Dispositivo voltou online',
+  telegram_alert_backup_ok:         'Backup concluído com sucesso',
+  telegram_alert_backup_fail:       'Falha no backup',
+  telegram_alert_playbook_ok:       'Playbook executado com sucesso',
+  telegram_alert_playbook_fail:     'Falha na execução de playbook',
+  telegram_alert_scan_ok:           'Scan concluído (Nmap/OpenVAS)',
+  telegram_alert_scan_fail:         'Scan falhou ou expirou (timeout)',
+  telegram_alert_rpki_invalid:      'Prefixo RPKI inválido detectado',
+  telegram_alert_rpki_change:       'Mudança de status RPKI (valid ↔ not-found)',
+  telegram_alert_ai_analysis:       'Análise de IA concluída',
+  telegram_alert_critical_command:  'Ação crítica executada (desativar porta/BGP)',
+  telegram_alert_login_suspicious:  'Tentativa de login suspeita / conta bloqueada',
+  telegram_alert_login_new_ip:      'Login de novo endereço IP',
 }
 
 function SystemTab() {
@@ -228,24 +279,31 @@ function SystemTab() {
           </div>
         </div>
 
-        <div className="divide-y divide-dark-700">
-          {Object.entries(ALERT_LABELS).map(([key, label]) => {
-            const isOn = configs[key] === 'true'
-            return (
-              <div key={key} className="flex items-center justify-between py-3">
-                <span className="text-sm text-dark-200">{label}</span>
-                <button
-                  onClick={() => toggleBool(key)}
-                  className="flex items-center gap-1.5 text-sm"
-                >
-                  {isOn
-                    ? <><ToggleRight className="w-5 h-5 text-green-400" /><span className="text-green-400 text-xs">Sim</span></>
-                    : <><ToggleLeft className="w-5 h-5 text-dark-500" /><span className="text-dark-500 text-xs">Não</span></>
-                  }
-                </button>
+        <div className="space-y-5">
+          {ALERT_GROUPS.map(group => (
+            <div key={group.label}>
+              <p className="text-xs font-semibold text-dark-400 uppercase tracking-wider mb-2">{group.label}</p>
+              <div className="divide-y divide-dark-700 border border-dark-700 rounded-lg overflow-hidden">
+                {group.keys.map(key => {
+                  const isOn = configs[key] === 'true'
+                  return (
+                    <div key={key} className="flex items-center justify-between px-4 py-3 bg-dark-800/40">
+                      <span className="text-sm text-dark-200">{ALERT_LABELS[key]}</span>
+                      <button
+                        onClick={() => toggleBool(key)}
+                        className="flex items-center gap-1.5 text-sm"
+                      >
+                        {isOn
+                          ? <><ToggleRight className="w-5 h-5 text-green-400" /><span className="text-green-400 text-xs">Sim</span></>
+                          : <><ToggleLeft className="w-5 h-5 text-dark-500" /><span className="text-dark-500 text-xs">Não</span></>
+                        }
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
-            )
-          })}
+            </div>
+          ))}
         </div>
 
         <button

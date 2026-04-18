@@ -128,6 +128,22 @@ async def login(
             ip_address=client_ip,
             status="failure",
         )
+        # Alerta Telegram: login falho / conta bloqueada
+        try:
+            from app.services.telegram_notify import notify_login_suspicious
+            _is_blocked = bool(
+                user and user.failed_login_attempts >= settings.MAX_LOGIN_ATTEMPTS
+            )
+            await notify_login_suspicious(
+                db=db,
+                username=login_data.username,
+                ip_address=client_ip,
+                reason="Conta bloqueada após múltiplas tentativas" if _is_blocked else "Senha incorreta",
+                attempts=user.failed_login_attempts if user else 1,
+                is_blocked=_is_blocked,
+            )
+        except Exception as _tg_err:
+            logger.warning(f"[Auth] Falha ao enviar alerta Telegram: {_tg_err}")
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -180,6 +196,19 @@ async def login(
         ip_address=client_ip,
         status="success",
     )
+    # Alerta Telegram: login de novo IP
+    try:
+        from app.services.telegram_notify import notify_new_ip_login
+        _prev_ip = getattr(user, 'last_login_ip', None)
+        if _prev_ip and _prev_ip != client_ip:
+            await notify_new_ip_login(
+                db=db,
+                username=user.username,
+                new_ip=client_ip,
+                previous_ip=_prev_ip,
+            )
+    except Exception as _tg_err:
+        logger.warning(f"[Auth] Falha ao enviar alerta Telegram novo IP: {_tg_err}")
 
     return LoginResponse(
         access_token=access_token,

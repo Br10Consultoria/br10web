@@ -116,6 +116,10 @@ async def _execute_scan(scan_id: str, request: StartScanRequest):
             if not scan:
                 return
 
+            # Contadores de severidade para alerta Telegram
+            _critical_count = 0
+            _high_count = 0
+
             if scan_result["success"]:
                 scan.status      = ScanStatus.COMPLETED
                 scan.hosts_up    = scan_result.get("hosts_up", 0)
@@ -128,6 +132,9 @@ async def _execute_scan(scan_id: str, request: StartScanRequest):
                 scan.total_findings = len(findings_data)
 
                 for f in findings_data:
+                    sev = f.get("severity", "info")
+                    if sev == "critical": _critical_count += 1
+                    elif sev == "high": _high_count += 1
                     finding = VulnFinding(
                         scan_id         = scan.id,
                         host            = f.get("host", ""),
@@ -160,6 +167,27 @@ async def _execute_scan(scan_id: str, request: StartScanRequest):
 
             await db.commit()
 
+            # ── Alerta Telegram ────────────────────────────────────────────────
+            try:
+                from app.services.telegram_notify import notify_scan_result
+                _tg_status = "completed" if scan_result["success"] else (
+                    "timeout" if "timeout" in (scan.error_msg or "").lower() else "failed"
+                )
+                await notify_scan_result(
+                    db=db,
+                    scan_name=scan.name,
+                    target=scan.target,
+                    scanner=scan.scanner.value,
+                    status=_tg_status,
+                    findings_count=scan.total_findings or 0,
+                    critical_count=_critical_count,
+                    high_count=_high_count,
+                    duration_s=scan.duration_s or 0,
+                    error_msg=scan.error_msg,
+                )
+            except Exception as _tg_err:
+                logger.warning(f"[vuln-scanner] Falha ao enviar alerta Telegram: {_tg_err}")
+
         except Exception as e:
             logger.error(f"[vuln-scanner] Erro crítico no scan {scan_id}: {e}", exc_info=True)
             async with AsyncSessionLocal() as db2:
@@ -169,6 +197,15 @@ async def _execute_scan(scan_id: str, request: StartScanRequest):
                     scan.status    = ScanStatus.FAILED
                     scan.error_msg = str(e)
                     await db2.commit()
+                    try:
+                        from app.services.telegram_notify import notify_scan_result
+                        await notify_scan_result(
+                            db=db2, scan_name=scan.name, target=scan.target,
+                            scanner=scan.scanner.value, status="failed",
+                            duration_s=0, error_msg=str(e)[:300],
+                        )
+                    except Exception:
+                        pass
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────

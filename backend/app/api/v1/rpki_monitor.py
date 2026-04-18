@@ -481,6 +481,9 @@ async def _check_monitor(
     monitor_id = monitor.id
     monitor_prefix = monitor.prefix
     monitor_asn = monitor.asn
+    monitor_prev_status = monitor.last_status  # salvar antes de sobrescrever para alerta de mudança
+    monitor_name = getattr(monitor, 'name', monitor_prefix)
+    monitor_alert_on_invalid = getattr(monitor, 'alert_on_invalid', True)
 
     start = time.time()
     error_msg = None
@@ -585,8 +588,31 @@ async def _check_monitor(
         await db.refresh(check)
         await db.refresh(monitor)
     except Exception:
-        # Se refresh falhar, os valores capturados acima ainda são válidos
         pass
+
+    # ── Alertas Telegram RPKI (após commit, sem bloquear o retorno) ────────────
+    try:
+        from app.services.telegram_notify import notify_rpki_invalid, notify_rpki_status_change
+        if status == "invalid" and monitor_alert_on_invalid:
+            await notify_rpki_invalid(
+                db=db,
+                prefix=monitor_prefix,
+                asn=monitor_asn,
+                monitor_name=monitor_name,
+                previous_status=monitor_prev_status,
+            )
+        elif (monitor_prev_status and monitor_prev_status != status
+              and monitor_prev_status not in (None, "never", "unknown")):
+            await notify_rpki_status_change(
+                db=db,
+                prefix=monitor_prefix,
+                old_status=monitor_prev_status,
+                new_status=status,
+                asn=monitor_asn,
+                monitor_name=monitor_name,
+            )
+    except Exception as _tg_err:
+        logger.warning(f"[RPKI] Falha ao enviar alerta Telegram: {_tg_err}")
 
     return check
 

@@ -4,12 +4,18 @@ BR10 NetManager - Serviço de Notificações Telegram Globais
 Funções de alto nível para envio de alertas do sistema via Telegram,
 usando as configurações globais armazenadas em SystemConfig.
 
-Uso:
-    from app.services.telegram_notify import notify_device_down, notify_backup_result
-    await notify_device_down(db, device_name="OLT-01", device_ip="10.0.0.1")
+Eventos cobertos:
+  - Dispositivo offline / online
+  - Backup concluído / falhou
+  - Playbook executado / falhou
+  - RPKI inválido / mudança de status
+  - Scan Nmap/VulnScanner concluído / falhou
+  - Análise de IA concluída
+  - Comando crítico executado no dispositivo
+  - Auditoria: login suspeito, falha de autenticação, ação de admin
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import httpx
@@ -20,11 +26,9 @@ from app.models.system_config import SystemConfig
 
 logger = logging.getLogger(__name__)
 
-
 # ─── Helpers internos ────────────────────────────────────────────────────────
 
 async def _get_config(db: AsyncSession, key: str, default: str = "") -> str:
-    """Busca uma configuração do sistema pelo key."""
     try:
         result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
         row = result.scalar_one_or_none()
@@ -42,6 +46,11 @@ async def _get_credentials(db: AsyncSession) -> tuple[str, str]:
     token   = await _get_config(db, "telegram_bot_token")
     chat_id = await _get_config(db, "telegram_chat_id")
     return token, chat_id
+
+
+async def _is_flag_on(db: AsyncSession, key: str, default: str = "true") -> bool:
+    val = await _get_config(db, key, default)
+    return val.lower() == "true"
 
 
 async def _send(token: str, chat_id: str, text: str) -> tuple[bool, str]:
@@ -65,13 +74,28 @@ async def _send(token: str, chat_id: str, text: str) -> tuple[bool, str]:
 
 
 def _now_br() -> str:
-    """Retorna data/hora atual formatada no fuso de Brasília."""
-    from datetime import timezone, timedelta
     tz_br = timezone(timedelta(hours=-3))
     return datetime.now(tz_br).strftime("%d/%m/%Y %H:%M:%S")
 
 
-# ─── Funções públicas de notificação ─────────────────────────────────────────
+async def _notify(db: AsyncSession, flag_key: str, msg: str, flag_default: str = "true", label: str = "") -> None:
+    """Helper genérico: verifica flag, busca credenciais e envia."""
+    try:
+        if not await _is_telegram_enabled(db):
+            return
+        if not await _is_flag_on(db, flag_key, flag_default):
+            return
+        token, chat_id = await _get_credentials(db)
+        ok, err = await _send(token, chat_id, msg)
+        if not ok:
+            logger.warning(f"[Telegram] Falha ao enviar {label}: {err}")
+        else:
+            logger.info(f"[Telegram] Alerta enviado: {label}")
+    except Exception as e:
+        logger.error(f"[Telegram] Erro em _notify({label}): {e}")
+
+
+# ─── Dispositivos ─────────────────────────────────────────────────────────────
 
 async def notify_device_down(
     db: AsyncSession,
@@ -79,29 +103,15 @@ async def notify_device_down(
     device_ip: str,
     client_name: Optional[str] = None,
 ) -> None:
-    """Envia alerta quando um dispositivo fica offline."""
-    try:
-        if not await _is_telegram_enabled(db):
-            return
-        flag = await _get_config(db, "telegram_alert_device_down", "true")
-        if flag.lower() != "true":
-            return
-        token, chat_id = await _get_credentials(db)
-        client_info = f"\n<b>Cliente:</b> {client_name}" if client_name else ""
-        msg = (
-            f"🔴 <b>DISPOSITIVO OFFLINE</b>\n"
-            f"<b>Nome:</b> {device_name}\n"
-            f"<b>IP:</b> <code>{device_ip}</code>"
-            f"{client_info}\n"
-            f"<b>Horário:</b> {_now_br()}"
-        )
-        ok, err = await _send(token, chat_id, msg)
-        if not ok:
-            logger.warning(f"[Telegram] Falha ao enviar alerta device_down ({device_name}): {err}")
-        else:
-            logger.info(f"[Telegram] Alerta device_down enviado: {device_name} ({device_ip})")
-    except Exception as e:
-        logger.error(f"[Telegram] Erro em notify_device_down: {e}")
+    client_info = f"\n<b>Cliente:</b> {client_name}" if client_name else ""
+    msg = (
+        f"🔴 <b>DISPOSITIVO OFFLINE</b>\n"
+        f"<b>Nome:</b> {device_name}\n"
+        f"<b>IP:</b> <code>{device_ip}</code>"
+        f"{client_info}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_device_down", msg, label=f"device_down:{device_name}")
 
 
 async def notify_device_up(
@@ -110,111 +120,318 @@ async def notify_device_up(
     device_ip: str,
     client_name: Optional[str] = None,
 ) -> None:
-    """Envia alerta quando um dispositivo volta online."""
-    try:
-        if not await _is_telegram_enabled(db):
-            return
-        flag = await _get_config(db, "telegram_alert_device_up", "true")
-        if flag.lower() != "true":
-            return
-        token, chat_id = await _get_credentials(db)
-        client_info = f"\n<b>Cliente:</b> {client_name}" if client_name else ""
-        msg = (
-            f"🟢 <b>DISPOSITIVO ONLINE</b>\n"
-            f"<b>Nome:</b> {device_name}\n"
-            f"<b>IP:</b> <code>{device_ip}</code>"
-            f"{client_info}\n"
-            f"<b>Horário:</b> {_now_br()}"
-        )
-        ok, err = await _send(token, chat_id, msg)
-        if not ok:
-            logger.warning(f"[Telegram] Falha ao enviar alerta device_up ({device_name}): {err}")
-        else:
-            logger.info(f"[Telegram] Alerta device_up enviado: {device_name} ({device_ip})")
-    except Exception as e:
-        logger.error(f"[Telegram] Erro em notify_device_up: {e}")
+    client_info = f"\n<b>Cliente:</b> {client_name}" if client_name else ""
+    msg = (
+        f"🟢 <b>DISPOSITIVO ONLINE</b>\n"
+        f"<b>Nome:</b> {device_name}\n"
+        f"<b>IP:</b> <code>{device_ip}</code>"
+        f"{client_info}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_device_up", msg, label=f"device_up:{device_name}")
 
+
+# ─── Backup ───────────────────────────────────────────────────────────────────
 
 async def notify_backup_result(
     db: AsyncSession,
     schedule_name: str,
-    status: str,          # "success" | "partial" | "failure"
+    status: str,
     device_count: int,
     failed_devices: list[str],
     duration_s: float,
 ) -> None:
-    """Envia alerta com resultado de execução de backup agendado."""
-    try:
-        if not await _is_telegram_enabled(db):
-            return
-        is_ok = status == "success"
-        flag_key = "telegram_alert_backup_ok" if is_ok else "telegram_alert_backup_fail"
-        flag = await _get_config(db, flag_key, "true")
-        if flag.lower() != "true":
-            return
-        token, chat_id = await _get_credentials(db)
-        icon = "✅" if is_ok else ("⚠️" if status == "partial" else "❌")
-        status_label = {"success": "SUCESSO", "partial": "PARCIAL", "failure": "FALHA"}.get(status, status.upper())
-        failed_info = ""
-        if failed_devices:
-            failed_info = f"\n<b>Falhas:</b> {', '.join(failed_devices[:5])}"
-            if len(failed_devices) > 5:
-                failed_info += f" (+{len(failed_devices) - 5})"
-        msg = (
-            f"{icon} <b>BACKUP {status_label}</b>\n"
-            f"<b>Agendamento:</b> {schedule_name}\n"
-            f"<b>Dispositivos:</b> {device_count}"
-            f"{failed_info}\n"
-            f"<b>Duração:</b> {duration_s:.0f}s\n"
-            f"<b>Horário:</b> {_now_br()}"
-        )
-        ok, err = await _send(token, chat_id, msg)
-        if not ok:
-            logger.warning(f"[Telegram] Falha ao enviar alerta backup ({schedule_name}): {err}")
-        else:
-            logger.info(f"[Telegram] Alerta backup enviado: {schedule_name} — {status_label}")
-    except Exception as e:
-        logger.error(f"[Telegram] Erro em notify_backup_result: {e}")
+    is_ok = status == "success"
+    flag_key = "telegram_alert_backup_ok" if is_ok else "telegram_alert_backup_fail"
+    icon = "✅" if is_ok else ("⚠️" if status == "partial" else "❌")
+    status_label = {"success": "SUCESSO", "partial": "PARCIAL", "failure": "FALHA"}.get(status, status.upper())
+    failed_info = ""
+    if failed_devices:
+        failed_info = f"\n<b>Falhas:</b> {', '.join(failed_devices[:5])}"
+        if len(failed_devices) > 5:
+            failed_info += f" (+{len(failed_devices) - 5})"
+    msg = (
+        f"{icon} <b>BACKUP {status_label}</b>\n"
+        f"<b>Agendamento:</b> {schedule_name}\n"
+        f"<b>Dispositivos:</b> {device_count}"
+        f"{failed_info}\n"
+        f"<b>Duração:</b> {duration_s:.0f}s\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, flag_key, msg, label=f"backup:{schedule_name}:{status_label}")
 
+
+# ─── Playbook ─────────────────────────────────────────────────────────────────
 
 async def notify_playbook_result(
     db: AsyncSession,
     playbook_name: str,
-    status: str,          # "success" | "failure" | "partial"
+    status: str,
     device_name: Optional[str] = None,
     duration_s: float = 0,
     error_summary: Optional[str] = None,
 ) -> None:
-    """Envia alerta com resultado de execução de playbook."""
-    try:
-        if not await _is_telegram_enabled(db):
-            return
-        is_ok = status in ("success", "partial")
-        flag_key = "telegram_alert_playbook_ok" if is_ok else "telegram_alert_playbook_fail"
-        flag = await _get_config(db, flag_key, "false" if is_ok else "true")
-        if flag.lower() != "true":
-            return
-        token, chat_id = await _get_credentials(db)
-        icon = "✅" if status == "success" else ("⚠️" if status == "partial" else "❌")
-        status_label = {"success": "CONCLUÍDO", "partial": "PARCIAL", "failure": "FALHOU"}.get(status, status.upper())
-        device_info = f"\n<b>Dispositivo:</b> {device_name}" if device_name else ""
-        error_info  = f"\n<b>Erro:</b> {error_summary[:200]}" if error_summary else ""
-        msg = (
-            f"{icon} <b>PLAYBOOK {status_label}</b>\n"
-            f"<b>Playbook:</b> {playbook_name}"
-            f"{device_info}"
-            f"{error_info}\n"
-            f"<b>Duração:</b> {duration_s:.0f}s\n"
-            f"<b>Horário:</b> {_now_br()}"
-        )
-        ok, err = await _send(token, chat_id, msg)
-        if not ok:
-            logger.warning(f"[Telegram] Falha ao enviar alerta playbook ({playbook_name}): {err}")
-        else:
-            logger.info(f"[Telegram] Alerta playbook enviado: {playbook_name} — {status_label}")
-    except Exception as e:
-        logger.error(f"[Telegram] Erro em notify_playbook_result: {e}")
+    is_ok = status in ("success", "partial")
+    flag_key = "telegram_alert_playbook_ok" if is_ok else "telegram_alert_playbook_fail"
+    icon = "✅" if status == "success" else ("⚠️" if status == "partial" else "❌")
+    status_label = {"success": "CONCLUÍDO", "partial": "PARCIAL", "failure": "FALHOU"}.get(status, status.upper())
+    device_info = f"\n<b>Dispositivo:</b> {device_name}" if device_name else ""
+    error_info  = f"\n<b>Erro:</b> {error_summary[:200]}" if error_summary else ""
+    msg = (
+        f"{icon} <b>PLAYBOOK {status_label}</b>\n"
+        f"<b>Playbook:</b> {playbook_name}"
+        f"{device_info}"
+        f"{error_info}\n"
+        f"<b>Duração:</b> {duration_s:.0f}s\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, flag_key, msg, flag_default="false" if is_ok else "true",
+                  label=f"playbook:{playbook_name}:{status_label}")
 
+
+# ─── RPKI ─────────────────────────────────────────────────────────────────────
+
+async def notify_rpki_invalid(
+    db: AsyncSession,
+    prefix: str,
+    asn: Optional[int],
+    monitor_name: Optional[str] = None,
+    previous_status: Optional[str] = None,
+) -> None:
+    """Alerta quando um prefixo RPKI tem status INVALID."""
+    name_info = f"\n<b>Monitor:</b> {monitor_name}" if monitor_name else ""
+    asn_info  = f"\n<b>ASN:</b> AS{asn}" if asn else ""
+    prev_info = f"\n<b>Status anterior:</b> {previous_status.upper()}" if previous_status else ""
+    msg = (
+        f"🚨 <b>RPKI INVÁLIDO</b>\n"
+        f"<b>Prefixo:</b> <code>{prefix}</code>"
+        f"{asn_info}"
+        f"{name_info}"
+        f"{prev_info}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_rpki_invalid", msg, label=f"rpki_invalid:{prefix}")
+
+
+async def notify_rpki_status_change(
+    db: AsyncSession,
+    prefix: str,
+    old_status: str,
+    new_status: str,
+    asn: Optional[int] = None,
+    monitor_name: Optional[str] = None,
+) -> None:
+    """Alerta quando o status RPKI de um prefixo muda."""
+    icons = {"valid": "🟢", "invalid": "🔴", "not-found": "🟡", "error": "⚠️", "unknown": "⚪"}
+    icon_old = icons.get(old_status, "⚪")
+    icon_new = icons.get(new_status, "⚪")
+    name_info = f"\n<b>Monitor:</b> {monitor_name}" if monitor_name else ""
+    asn_info  = f"\n<b>ASN:</b> AS{asn}" if asn else ""
+    msg = (
+        f"🔄 <b>RPKI — MUDANÇA DE STATUS</b>\n"
+        f"<b>Prefixo:</b> <code>{prefix}</code>"
+        f"{asn_info}"
+        f"{name_info}\n"
+        f"<b>Antes:</b> {icon_old} {old_status.upper()}\n"
+        f"<b>Agora:</b>  {icon_new} {new_status.upper()}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_rpki_change", msg, label=f"rpki_change:{prefix}:{old_status}->{new_status}")
+
+
+# ─── VulnScanner / Nmap ───────────────────────────────────────────────────────
+
+async def notify_scan_result(
+    db: AsyncSession,
+    scan_name: str,
+    target: str,
+    scanner: str,
+    status: str,           # "completed" | "failed" | "timeout"
+    findings_count: int = 0,
+    critical_count: int = 0,
+    high_count: int = 0,
+    duration_s: float = 0,
+    error_msg: Optional[str] = None,
+) -> None:
+    """Alerta ao concluir ou falhar um scan de vulnerabilidades."""
+    is_ok = status == "completed"
+    flag_key = "telegram_alert_scan_ok" if is_ok else "telegram_alert_scan_fail"
+    icon = "✅" if is_ok else ("⏱️" if status == "timeout" else "❌")
+    status_label = {"completed": "CONCLUÍDO", "failed": "FALHOU", "timeout": "TIMEOUT"}.get(status, status.upper())
+    findings_info = ""
+    if is_ok and findings_count > 0:
+        findings_info = (
+            f"\n<b>Findings:</b> {findings_count} total"
+            + (f" | 🔴 Críticos: {critical_count}" if critical_count else "")
+            + (f" | 🟠 Altos: {high_count}" if high_count else "")
+        )
+    elif is_ok:
+        findings_info = "\n<b>Findings:</b> Nenhum encontrado ✓"
+    error_info = f"\n<b>Erro:</b> {error_msg[:200]}" if error_msg else ""
+    msg = (
+        f"{icon} <b>SCAN {status_label}</b>\n"
+        f"<b>Nome:</b> {scan_name}\n"
+        f"<b>Alvo:</b> <code>{target}</code>\n"
+        f"<b>Scanner:</b> {scanner.upper()}"
+        f"{findings_info}"
+        f"{error_info}\n"
+        f"<b>Duração:</b> {duration_s:.0f}s\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, flag_key, msg, flag_default="true", label=f"scan:{scan_name}:{status_label}")
+
+
+# ─── Análise de IA ────────────────────────────────────────────────────────────
+
+async def notify_ai_analysis(
+    db: AsyncSession,
+    analysis_type: str,
+    device_name: Optional[str] = None,
+    status: str = "success",
+    tokens_used: int = 0,
+    duration_s: float = 0,
+    summary: Optional[str] = None,
+    error_msg: Optional[str] = None,
+) -> None:
+    """Alerta ao concluir uma análise de IA."""
+    is_ok = status == "success"
+    flag_key = "telegram_alert_ai_ok" if is_ok else "telegram_alert_ai_fail"
+    icon = "🤖" if is_ok else "❌"
+    status_label = "CONCLUÍDA" if is_ok else "FALHOU"
+    type_labels = {
+        "alarms": "Alarmes", "bgp": "BGP", "olt": "OLT",
+        "system_log": "Log do Sistema", "security": "Segurança",
+        "config": "Configuração", "custom": "Personalizada",
+    }
+    type_label = type_labels.get(analysis_type, analysis_type.replace("_", " ").title())
+    device_info  = f"\n<b>Dispositivo:</b> {device_name}" if device_name else ""
+    summary_info = f"\n<b>Resumo:</b> {summary[:300]}..." if summary and len(summary) > 50 else (f"\n<b>Resumo:</b> {summary}" if summary else "")
+    tokens_info  = f"\n<b>Tokens:</b> {tokens_used:,}" if tokens_used else ""
+    error_info   = f"\n<b>Erro:</b> {error_msg[:200]}" if error_msg else ""
+    msg = (
+        f"{icon} <b>ANÁLISE DE IA {status_label}</b>\n"
+        f"<b>Tipo:</b> {type_label}"
+        f"{device_info}"
+        f"{summary_info}"
+        f"{tokens_info}"
+        f"{error_info}\n"
+        f"<b>Duração:</b> {duration_s:.1f}s\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, flag_key, msg, flag_default="false", label=f"ai:{analysis_type}:{status_label}")
+
+
+# ─── Comandos críticos no dispositivo ────────────────────────────────────────
+
+# Palavras-chave que identificam comandos críticos (que alteram configuração)
+CRITICAL_COMMAND_KEYWORDS = [
+    "shutdown", "no shutdown", "no onu", "undo", "reset",
+    "delete", "remove", "disable", "enable port", "port down",
+    "interface shutdown", "no interface", "ip route", "no ip route",
+    "bgp", "ospf", "isis", "no bgp", "no ospf",
+    "write", "save", "commit", "rollback",
+    "reboot", "restart", "reload",
+    "no access-user", "cut access-user",
+]
+
+
+def _is_critical_command(cmd: str) -> bool:
+    cmd_lower = cmd.lower().strip()
+    return any(kw in cmd_lower for kw in CRITICAL_COMMAND_KEYWORDS)
+
+
+async def notify_critical_command(
+    db: AsyncSession,
+    username: str,
+    device_name: str,
+    device_ip: str,
+    command: str,
+    success: bool,
+    category: Optional[str] = None,
+    client_name: Optional[str] = None,
+) -> None:
+    """Alerta quando um comando crítico é executado em um dispositivo."""
+    icon = "⚙️" if success else "❌"
+    status_label = "EXECUTADO" if success else "FALHOU"
+    client_info   = f"\n<b>Cliente:</b> {client_name}" if client_name else ""
+    category_info = f"\n<b>Categoria:</b> {category}" if category else ""
+    msg = (
+        f"{icon} <b>COMANDO CRÍTICO {status_label}</b>\n"
+        f"<b>Operador:</b> {username}\n"
+        f"<b>Dispositivo:</b> {device_name} (<code>{device_ip}</code>)"
+        f"{client_info}"
+        f"{category_info}\n"
+        f"<b>Comando:</b> <code>{command[:300]}</code>\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_critical_command", msg, flag_default="true",
+                  label=f"critical_cmd:{device_name}:{command[:40]}")
+
+
+# ─── Auditoria ────────────────────────────────────────────────────────────────
+
+async def notify_login_failed(
+    db: AsyncSession,
+    username: str,
+    ip_address: Optional[str] = None,
+    attempt_count: int = 1,
+) -> None:
+    """Alerta em falhas de autenticação (possível ataque de força bruta)."""
+    ip_info = f"\n<b>IP:</b> <code>{ip_address}</code>" if ip_address else ""
+    count_info = f"\n<b>Tentativas:</b> {attempt_count}" if attempt_count > 1 else ""
+    msg = (
+        f"⚠️ <b>FALHA DE AUTENTICAÇÃO</b>\n"
+        f"<b>Usuário:</b> <code>{username}</code>"
+        f"{ip_info}"
+        f"{count_info}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_login_failed", msg, flag_default="true",
+                  label=f"login_failed:{username}")
+
+
+async def notify_login_new_ip(
+    db: AsyncSession,
+    username: str,
+    ip_address: str,
+    user_agent: Optional[str] = None,
+) -> None:
+    """Alerta quando um usuário faz login de um IP não visto antes."""
+    ua_info = f"\n<b>Navegador:</b> {user_agent[:100]}" if user_agent else ""
+    msg = (
+        f"🔐 <b>LOGIN DE IP NOVO</b>\n"
+        f"<b>Usuário:</b> {username}\n"
+        f"<b>IP:</b> <code>{ip_address}</code>"
+        f"{ua_info}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_login_new_ip", msg, flag_default="false",
+                  label=f"login_new_ip:{username}:{ip_address}")
+
+
+async def notify_admin_action(
+    db: AsyncSession,
+    username: str,
+    action: str,
+    target: Optional[str] = None,
+    details: Optional[str] = None,
+) -> None:
+    """Alerta para ações administrativas críticas (criar/deletar usuário, alterar permissões, etc.)."""
+    target_info  = f"\n<b>Alvo:</b> {target}" if target else ""
+    details_info = f"\n<b>Detalhes:</b> {details[:200]}" if details else ""
+    msg = (
+        f"🛡️ <b>AÇÃO ADMINISTRATIVA</b>\n"
+        f"<b>Operador:</b> {username}\n"
+        f"<b>Ação:</b> {action}"
+        f"{target_info}"
+        f"{details_info}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, "telegram_alert_admin_action", msg, flag_default="true",
+                  label=f"admin_action:{username}:{action}")
+
+
+# ─── Mensagem customizada / Teste ─────────────────────────────────────────────
 
 async def send_custom_message(
     db: AsyncSession,
@@ -222,10 +439,6 @@ async def send_custom_message(
     token: Optional[str] = None,
     chat_id: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """
-    Envia mensagem customizada.
-    Se token/chat_id não fornecidos, usa as configurações globais.
-    """
     try:
         if not token or not chat_id:
             token, chat_id = await _get_credentials(db)
@@ -235,13 +448,13 @@ async def send_custom_message(
 
 
 async def test_telegram_global(db: AsyncSession) -> tuple[bool, str]:
-    """Testa as configurações globais de Telegram."""
     token, chat_id = await _get_credentials(db)
     if not token or not chat_id:
         return False, "Token ou chat_id não configurados em Configurações do Sistema."
     msg = (
         f"✅ <b>BR10 NetManager</b>\n"
         f"Configuração Telegram validada com sucesso!\n"
+        f"Todos os alertas do sistema estão configurados.\n"
         f"<b>Horário:</b> {_now_br()}"
     )
     return await _send(token, chat_id, msg)
