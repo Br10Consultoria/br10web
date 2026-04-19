@@ -7,8 +7,10 @@
     box-sizing: border-box;
   }
 
+  /* ─── Fonte base reduzida: 13px (era 16px padrão do navegador) ───────────── */
   html {
     scroll-behavior: smooth;
+    font-size: 13px;
   }
 
   body {
@@ -20,17 +22,17 @@
 @layer components {
   /* ─── Buttons ─────────────────────────────────────────────────────────────── */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm;
-    @apply transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-900;
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-xs;
+    @apply transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-offset-dark-900;
     @apply disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-sm {
-    @apply px-3 py-1.5 text-xs;
+    @apply px-2 py-1 text-xs;
   }
 
   .btn-lg {
-    @apply px-6 py-3 text-base;
+    @apply px-5 py-2 text-sm;
   }
 
   .btn-primary {
@@ -60,7 +62,7 @@
 
   /* ─── Cards ───────────────────────────────────────────────────────────────── */
   .card {
-    @apply bg-dark-800 border border-dark-700 rounded-xl shadow-lg p-6;
+    @apply bg-dark-800 border border-dark-700 rounded-xl shadow-lg p-4;
   }
 
   .card-hover {
@@ -69,7 +71,7 @@
 
   /* ─── Inputs ──────────────────────────────────────────────────────────────── */
   .input {
-    @apply w-full px-4 py-2.5 rounded-lg border text-sm;
+    @apply w-full px-3 py-1.5 rounded-lg border text-xs;
     @apply bg-dark-800 border-dark-700 text-white placeholder-dark-500;
     @apply focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20;
     @apply transition-all duration-200;
@@ -80,12 +82,12 @@
   }
 
   .label {
-    @apply block text-sm font-medium text-dark-300 mb-1.5;
+    @apply block text-xs font-medium text-dark-300 mb-1;
   }
 
   /* ─── Badges ──────────────────────────────────────────────────────────────── */
   .badge {
-    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium border;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border;
   }
 
   .badge-success {
@@ -116,7 +118,7 @@
 
   /* ─── Status Dots ─────────────────────────────────────────────────────────── */
   .status-dot {
-    @apply w-2 h-2 rounded-full inline-block;
+    @apply w-1.5 h-1.5 rounded-full inline-block;
   }
 
   .status-dot-online { @apply bg-green-400; }
@@ -131,7 +133,7 @@
   }
 
   .table {
-    @apply w-full text-sm;
+    @apply w-full text-xs;
   }
 
   .table thead tr {
@@ -139,7 +141,7 @@
   }
 
   .table th {
-    @apply px-4 py-3 text-left text-xs font-semibold text-dark-400 uppercase tracking-wider;
+    @apply px-3 py-2 text-left text-xs font-semibold text-dark-400 uppercase tracking-wider;
   }
 
   .table tbody tr {
@@ -147,25 +149,25 @@
   }
 
   .table td {
-    @apply px-4 py-3 text-dark-200;
+    @apply px-3 py-2 text-dark-200;
   }
 
   /* ─── Page Layout ─────────────────────────────────────────────────────────── */
   .page-header {
-    @apply flex items-center justify-between gap-4 flex-wrap;
+    @apply flex items-center justify-between gap-3 flex-wrap;
   }
 
   .page-title {
-    @apply text-2xl font-bold text-white;
+    @apply text-xl font-bold text-white;
   }
 
   .stats-grid {
-    @apply grid grid-cols-2 lg:grid-cols-4 gap-4;
+    @apply grid grid-cols-2 lg:grid-cols-4 gap-3;
   }
 
   /* ─── Sidebar ─────────────────────────────────────────────────────────────── */
   .sidebar-link {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium;
+    @apply flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium;
     @apply text-dark-400 hover:text-white hover:bg-dark-700/50;
     @apply transition-all duration-200;
   }
@@ -176,20 +178,20 @@
 
   /* ─── Nav Items ───────────────────────────────────────────────────────────── */
   .nav-item {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium w-full;
+    @apply flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium w-full;
     @apply text-dark-400 hover:text-white hover:bg-dark-700/50;
     @apply transition-all duration-200;
   }
 
   .nav-item-active {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium w-full;
+    @apply flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium w-full;
     @apply bg-brand-600/20 text-brand-400 border border-brand-500/20;
     @apply transition-all duration-200;
   }
 
   /* ─── Modals ──────────────────────────────────────────────────────────────── */
   .modal-overlay {
-    @apply fixed inset-0 z-50 flex items-center justify-center p-4;
+    @apply fixed inset-0 z-50 flex items-center justify-center p-3;
   }
 
   .modal-backdrop {
@@ -201,21 +203,21 @@
   }
 
   .modal-header {
-    @apply flex items-center justify-between px-6 py-4 border-b border-dark-700;
+    @apply flex items-center justify-between px-5 py-3 border-b border-dark-700;
   }
 
   .modal-body {
-    @apply p-6;
+    @apply p-4;
   }
 
   .modal-footer {
-    @apply flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-700;
+    @apply flex items-center justify-end gap-2 px-5 py-3 border-t border-dark-700;
   }
 }
 
 /* ─── Terminal (xterm.js) ─────────────────────────────────────────────────── */
 .xterm {
-  padding: 8px;
+  padding: 6px;
   height: 100%;
 }
 
@@ -237,8 +239,8 @@
 
 /* ─── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -256,12 +258,12 @@
 
 /* ─── Animations ──────────────────────────────────────────────────────────── */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes slideInLeft {
-  from { opacity: 0; transform: translateX(-16px); }
+  from { opacity: 0; transform: translateX(-12px); }
   to { opacity: 1; transform: translateX(0); }
 }
 
@@ -281,11 +283,11 @@
 /* ─── Responsive Utilities ────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .page-title {
-    @apply text-xl;
+    @apply text-lg;
   }
 
   .card {
-    @apply p-4;
+    @apply p-3;
   }
 
   .stats-grid {
