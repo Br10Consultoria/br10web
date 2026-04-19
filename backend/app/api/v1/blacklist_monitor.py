@@ -35,6 +35,7 @@ from app.models.audit import AuditAction
 from app.core.audit_helper import log_audit
 from app.core.security import encrypt_field, decrypt_field
 from app.services.mxtoolbox_service import MxToolboxService, get_mxtoolbox_service_from_db
+from app.services.telegram_notify import notify_blacklist_check
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,40 @@ async def _do_blacklist_check(
         monitor.last_error = result.get("error")
 
     await db.commit()
+
+    # ─── Alerta Telegram ─────────────────────────────────────────────────────
+    # Buscar nome do usuário que disparou a consulta (se disponível)
+    triggered_by_username: Optional[str] = None
+    if triggered_by:
+        try:
+            from app.models.user import User as _User
+            from sqlalchemy import select as _select
+            u_result = await db.execute(_select(_User).where(_User.id == triggered_by))
+            u_obj = u_result.scalar_one_or_none()
+            if u_obj:
+                triggered_by_username = u_obj.username or u_obj.email
+        except Exception:
+            pass
+
+    try:
+        await notify_blacklist_check(
+            db=db,
+            target=target,
+            target_type=target_type,
+            status=result["status"],
+            listed_count=result.get("listed_count", 0),
+            checked_count=result.get("checked_count", 0),
+            blacklists_found=result.get("blacklists_found", []),
+            all_results=result.get("all_results", []),
+            trigger_type=trigger_type,
+            monitor_name=monitor.name if monitor else None,
+            triggered_by_username=triggered_by_username,
+            duration_ms=result.get("duration_ms"),
+        )
+    except Exception as _tg_err:
+        logger.warning(f"[Telegram] Falha ao enviar alerta blacklist: {_tg_err}")
+    # ─────────────────────────────────────────────────────────────────────────
+
     return check
 
 

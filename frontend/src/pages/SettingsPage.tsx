@@ -52,6 +52,9 @@ const TELEGRAM_KEYS = [
   'telegram_alert_critical_command',
   'telegram_alert_login_suspicious',
   'telegram_alert_login_new_ip',
+  'telegram_alert_blacklist_listed',
+  'telegram_alert_blacklist_clean',
+  'telegram_alert_blacklist_error',
 ]
 
 const ALERT_GROUPS: { label: string; keys: string[] }[] = [
@@ -87,6 +90,14 @@ const ALERT_GROUPS: { label: string; keys: string[] }[] = [
     label: 'Segurança e Auditoria',
     keys: ['telegram_alert_login_suspicious', 'telegram_alert_login_new_ip'],
   },
+  {
+    label: 'Blacklist / Reputação de IP',
+    keys: [
+      'telegram_alert_blacklist_listed',
+      'telegram_alert_blacklist_clean',
+      'telegram_alert_blacklist_error',
+    ],
+  },
 ]
 
 const ALERT_LABELS: Record<string, string> = {
@@ -102,8 +113,11 @@ const ALERT_LABELS: Record<string, string> = {
   telegram_alert_rpki_change:       'Mudança de status RPKI (valid ↔ not-found)',
   telegram_alert_ai_analysis:       'Análise de IA concluída',
   telegram_alert_critical_command:  'Ação crítica executada (desativar porta/BGP)',
-  telegram_alert_login_suspicious:  'Tentativa de login suspeita / conta bloqueada',
-  telegram_alert_login_new_ip:      'Login de novo endereço IP',
+  telegram_alert_login_suspicious:   'Tentativa de login suspeita / conta bloqueada',
+  telegram_alert_login_new_ip:       'Login de novo endereço IP',
+  telegram_alert_blacklist_listed:   '🚫 Alvo encontrado em blacklist (sempre notificar)',
+  telegram_alert_blacklist_clean:    '✅ Alvo limpo em todas as listas (consulta sem positivos)',
+  telegram_alert_blacklist_error:    '⚠️ Erro na consulta de blacklist',
 }
 
 function SystemTab() {

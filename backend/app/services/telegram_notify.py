@@ -431,6 +431,95 @@ async def notify_admin_action(
                   label=f"admin_action:{username}:{action}")
 
 
+# ─── Blacklist / Reputação de IP ────────────────────────────────────────────
+
+async def notify_blacklist_check(
+    db: AsyncSession,
+    target: str,
+    target_type: str,
+    status: str,              # "listed" | "clean" | "error"
+    listed_count: int = 0,
+    checked_count: int = 0,
+    blacklists_found: Optional[list] = None,
+    all_results: Optional[list] = None,
+    trigger_type: str = "manual",   # "manual" | "scheduled" | "monitor"
+    monitor_name: Optional[str] = None,
+    triggered_by_username: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+) -> None:
+    """
+    Alerta quando uma consulta de blacklist/reputação é realizada.
+    - Sempre dispara quando o alvo está LISTADO (status=listed).
+    - Consultas limpas disparam apenas se o toggle 'blacklist_clean' estiver ativo.
+    - Erros disparam apenas se o toggle 'blacklist_error' estiver ativo.
+    """
+    if status == "listed":
+        flag_key = "telegram_alert_blacklist_listed"
+        flag_default = "true"
+    elif status == "clean":
+        flag_key = "telegram_alert_blacklist_clean"
+        flag_default = "false"   # desligado por padrão — evita spam em consultas limpas
+    else:
+        flag_key = "telegram_alert_blacklist_error"
+        flag_default = "false"
+
+    # ─── Ícone e título ───────────────────────────────────────────────────────
+    icons = {"listed": "🚫", "clean": "✅", "error": "⚠️"}
+    titles = {"listed": "BLACKLIST — ALVO LISTADO", "clean": "BLACKLIST — ALVO LIMPO", "error": "BLACKLIST — ERRO NA CONSULTA"}
+    icon  = icons.get(status, "❓")
+    title = titles.get(status, f"BLACKLIST — {status.upper()}")
+
+    # ─── Tipo do alvo ─────────────────────────────────────────────────────────
+    type_labels = {"ip": "IP", "domain": "Domínio", "asn": "ASN"}
+    type_label = type_labels.get(target_type, target_type.upper())
+
+    # ─── Listas positivas ─────────────────────────────────────────────────────
+    listed_info = ""
+    if blacklists_found and status == "listed":
+        # Mostrar até 10 listas onde o alvo foi encontrado
+        bl_list = blacklists_found[:10]
+        bl_lines = "\n".join(f"  • {bl}" for bl in bl_list)
+        extra = f"\n  <i>(+{len(blacklists_found) - 10} mais)</i>" if len(blacklists_found) > 10 else ""
+        listed_info = f"\n<b>Listas positivas:</b>\n{bl_lines}{extra}"
+
+    # ─── Score / escore de risco ──────────────────────────────────────────────
+    score_info = ""
+    if checked_count > 0:
+        score_pct = round((listed_count / checked_count) * 100, 1)
+        if status == "listed":
+            if score_pct >= 50:
+                score_icon = "🔴"
+            elif score_pct >= 20:
+                score_icon = "🟠"
+            else:
+                score_icon = "🟡"
+            score_info = f"\n<b>Escore de risco:</b> {score_icon} {listed_count}/{checked_count} listas ({score_pct}%)"
+        else:
+            score_info = f"\n<b>Verificado em:</b> {checked_count} listas"
+
+    # ─── Detalhes adicionais ──────────────────────────────────────────────────
+    trigger_labels = {"manual": "Manual", "scheduled": "Agendado", "monitor": "Monitor automático"}
+    trigger_label = trigger_labels.get(trigger_type, trigger_type.title())
+    monitor_info  = f"\n<b>Monitor:</b> {monitor_name}" if monitor_name else ""
+    user_info     = f"\n<b>Consultado por:</b> {triggered_by_username}" if triggered_by_username else ""
+    duration_info = f"\n<b>Duração:</b> {duration_ms}ms" if duration_ms else ""
+
+    msg = (
+        f"{icon} <b>{title}</b>\n"
+        f"<b>Alvo:</b> <code>{target}</code>\n"
+        f"<b>Tipo:</b> {type_label}"
+        f"{score_info}"
+        f"{listed_info}"
+        f"{monitor_info}"
+        f"\n<b>Origem:</b> {trigger_label}"
+        f"{user_info}"
+        f"{duration_info}\n"
+        f"<b>Horário:</b> {_now_br()}"
+    )
+    await _notify(db, flag_key, msg, flag_default=flag_default,
+                  label=f"blacklist:{status}:{target}")
+
+
 # ─── Mensagem customizada / Teste ─────────────────────────────────────────────
 
 async def send_custom_message(
