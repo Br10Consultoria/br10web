@@ -116,7 +116,7 @@ export function PlaybookTerminal({
   onDone,
 }: PlaybookTerminalProps) {
   const { accessToken } = useAuthStore();
-  const token = accessToken || sessionStorage.getItem('access_token') || '';
+  const token = accessToken || localStorage.getItem('access_token') || '';
 
   // Estado da execução
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');

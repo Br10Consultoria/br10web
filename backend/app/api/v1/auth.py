@@ -2,12 +2,15 @@
 BR10 NetManager - Authentication API
 Endpoints de autenticação com suporte a 2FA.
 """
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
+
+logger = logging.getLogger(__name__)
 
 from app.core.database import get_db
 from app.core.security import (

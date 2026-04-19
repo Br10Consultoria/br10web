@@ -661,7 +661,7 @@ const DeviceBackupPage: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     // Garante o token mesmo antes da hidratação do zustand/persist
-    const token = accessToken || sessionStorage.getItem('access_token');
+    const token = accessToken || localStorage.getItem('access_token');
     const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
     try {
       const [sRes, eRes, sumRes, pbRes, devRes] = await Promise.all([

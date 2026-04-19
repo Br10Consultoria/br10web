@@ -66,7 +66,7 @@ export default function RouteFormModal({ deviceId, route, vpnConfigs = [], onClo
     setPinging(true)
     setPingResult(null)
     try {
-      const token = sessionStorage.getItem('access_token')
+      const token = localStorage.getItem('access_token')
       const res = await fetch(`/api/v1/devices/${deviceId}/ping`, {
         method: 'POST',
         headers: {
