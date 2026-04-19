@@ -138,8 +138,14 @@ export default function BlacklistMonitorPage() {
   // ── Novo monitor ──
   const [showAddForm, setShowAddForm] = useState(false)
   const [newMonitor, setNewMonitor] = useState({
-    name: '', target: '', target_type: 'ip', client_name: '', description: '', alert_on_listed: true,
+    name: '', target: '', target_type: 'ip', client_id: '', description: '', alert_on_listed: true,
   })
+
+  // ── Clientes cadastrados ──
+  const [clients, setClients] = useState<{id: string; name: string}[]>([])
+  useEffect(() => {
+    api.get('/clients').then(r => setClients(r.data || [])).catch(() => {})
+  }, [])
 
   // ── Histórico expandido ──
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null)
@@ -178,12 +184,18 @@ export default function BlacklistMonitorPage() {
   })
 
   const createMonitorMut = useMutation({
-    mutationFn: (data: typeof newMonitor) => api.post('/blacklist/monitors', data).then(r => r.data),
+    mutationFn: (data: typeof newMonitor) => {
+      const payload = {
+        ...data,
+        client_id: data.client_id && data.client_id.trim() ? data.client_id : null,
+      }
+      return api.post('/blacklist/monitors', payload).then(r => r.data)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['blacklist-monitors'] })
       qc.invalidateQueries({ queryKey: ['blacklist-summary'] })
       setShowAddForm(false)
-      setNewMonitor({ name: '', target: '', target_type: 'ip', client_name: '', description: '', alert_on_listed: true })
+      setNewMonitor({ name: '', target: '', target_type: 'ip', client_id: '', description: '', alert_on_listed: true })
       toast.success('Monitor criado com sucesso!')
     },
     onError: () => toast.error('Erro ao criar monitor'),
@@ -353,12 +365,16 @@ export default function BlacklistMonitorPage() {
                 </div>
                 <div>
                   <label className="block text-sm text-dark-300 mb-1">Cliente (opcional)</label>
-                  <input
+                  <select
                     className="input w-full"
-                    placeholder="Nome do cliente"
-                    value={newMonitor.client_name}
-                    onChange={e => setNewMonitor(p => ({ ...p, client_name: e.target.value }))}
-                  />
+                    value={newMonitor.client_id}
+                    onChange={e => setNewMonitor(p => ({ ...p, client_id: e.target.value }))}
+                  >
+                    <option value="">-- Sem cliente --</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="md:col-span-2">
                   <label className="block text-sm text-dark-300 mb-1">Descrição (opcional)</label>

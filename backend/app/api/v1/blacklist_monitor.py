@@ -275,14 +275,13 @@ async def create_monitor(
 
     await log_audit(
         db,
-        action=AuditAction.CREATE,
+        action=AuditAction.RPKI_MONITOR_CREATED,  # reutiliza ação de criação de monitor
         user_id=current_user.id,
         resource_type="blacklist_monitor",
         resource_id=str(monitor.id),
         description=f"Monitor de blacklist criado: {monitor.name} ({monitor.target})",
         status="success",
     )
-
     return _monitor_to_dict(monitor)
 
 
@@ -535,7 +534,7 @@ async def save_api_key(
 
     await log_audit(
         db,
-        action=AuditAction.UPDATE,
+        action=AuditAction.RPKI_MONITOR_UPDATED,  # reutiliza ação de atualização de monitor
         user_id=current_user.id,
         resource_type="system_api_key",
         resource_id=req.service,
