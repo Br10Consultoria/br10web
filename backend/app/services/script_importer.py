@@ -1136,17 +1136,176 @@ def _build_parks_template() -> List[Dict[str, Any]]:
     ]
 
 
-# ─── Mapeamento de vendor (bkpolts) para label amigável ────────────────────────
-VENDOR_LABELS: Dict[str, str] = {
-    "huawei":        "Huawei",
-    "zte":           "ZTE",
-    "fiberhome":     "Fiberhome",
-    "datacom":       "Datacom",
-    "parks":         "Parks",
-    "intelbras_g16": "Intelbras G16",
+# ─── Template ZTE GPON — Remoção de ONUs Offline/LOS via run_script ────────────────────
+
+_ZTE_GPON_REMOVE_OFFLINE_SCRIPT = '''
+import os
+import sys
+import time
+
+try:
+    from netmiko import ConnectHandler
+except ImportError:
+    print("[ERRO] netmiko não instalado. Execute: pip install netmiko")
+    sys.exit(1)
+
+# ─ Configuração — lida de variáveis de ambiente injetadas pelo BR10 ─
+HOST     = os.environ.get("HOST",     os.environ.get("DEVICE_IP", ""))
+USER     = os.environ.get("USERNAME", os.environ.get("USER", ""))
+PASS     = os.environ.get("PASSWORD", os.environ.get("PASS", ""))
+
+# Slots e PONs a varrer (pode ser sobrescrito via variáveis do playbook)
+SLOT_START = int(os.environ.get("SLOT_START", "1"))
+SLOT_END   = int(os.environ.get("SLOT_END",   "2"))
+PON_START  = int(os.environ.get("PON_START",  "1"))
+PON_END    = int(os.environ.get("PON_END",    "16"))
+DRY_RUN    = os.environ.get("DRY_RUN", "false").lower() == "true"
+
+if not HOST or not USER:
+    print("[ERRO] HOST, USERNAME e PASSWORD devem estar configurados nas variáveis do playbook.")
+    sys.exit(1)
+
+print(f"[BR10] Conectando em {HOST} como {USER}...")
+print(f"[BR10] Slots: {SLOT_START}–{SLOT_END}, PONs: {PON_START}–{PON_END}")
+if DRY_RUN:
+    print("[BR10] MODO DRY-RUN ativado — nenhuma ONU será removida.")
+
+device = {
+    "device_type": "zte_zxros",
+    "host":        HOST,
+    "username":    USER,
+    "password":    PASS,
+    "timeout":     60,
+    "session_log": None,
 }
 
+total_removed = 0
+total_errors  = 0
+to_remove = {}  # {"1/1/1": [1, 5, 12], ...}
 
+try:
+    conn = ConnectHandler(**device)
+    conn.enable()
+    print(f"[BR10] Conectado com sucesso em {HOST}")
+except Exception as e:
+    print(f"[ERRO] Falha ao conectar: {e}")
+    sys.exit(1)
+
+# ─ Fase 1: Coletar ONUs offline/LOS ─
+print("\n[BR10] === Fase 1: Coletando ONUs Offline/LOS ===")
+for slot in range(SLOT_START, SLOT_END + 1):
+    for pon in range(PON_START, PON_END + 1):
+        pon_id = f"{slot}/1/{pon}"
+        cmd = f"show gpon onu state gpon-olt_{pon_id}"
+        try:
+            output = conn.send_command(cmd, expect_string=r"#", read_timeout=30)
+            candidates = []
+            for line in output.splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and ("OffLine" in line or "LOS" in line):
+                    try:
+                        onu_id = int(parts[0])
+                        candidates.append(onu_id)
+                    except (ValueError, IndexError):
+                        pass
+            if candidates:
+                to_remove[pon_id] = candidates
+                print(f"  PON {pon_id}: {len(candidates)} ONU(s) offline/LOS → {candidates}")
+            else:
+                print(f"  PON {pon_id}: nenhuma ONU offline")
+        except Exception as e:
+            print(f"  PON {pon_id}: erro ao consultar — {e}")
+            total_errors += 1
+        time.sleep(0.2)
+
+if not to_remove:
+    print("\n[BR10] Nenhuma ONU offline/LOS encontrada. Nada a remover.")
+    conn.disconnect()
+    print("[BR10] Concluído com sucesso.")
+    sys.exit(0)
+
+print(f"\n[BR10] Total de PONs com ONUs a remover: {len(to_remove)}")
+
+# ─ Fase 2: Remover ONUs ─
+print("\n[BR10] === Fase 2: Removendo ONUs ===")
+for pon_id, onu_ids in to_remove.items():
+    try:
+        conn.send_command(f"configure terminal", expect_string=r"#")
+        conn.send_command(f"interface gpon-olt_{pon_id}", expect_string=r"#")
+        for onu_id in onu_ids:
+            if DRY_RUN:
+                print(f"  [DRY-RUN] Removeria ONU {onu_id} em {pon_id}")
+            else:
+                out = conn.send_command(f"no onu {onu_id}", expect_string=r"#", read_timeout=15)
+                print(f"  Removida ONU {onu_id} em {pon_id}: {out.strip()[:80]}")
+                total_removed += 1
+        conn.send_command("exit", expect_string=r"#")
+        conn.send_command("exit", expect_string=r"#")
+    except Exception as e:
+        print(f"  ERRO ao remover ONUs em {pon_id}: {e}")
+        total_errors += 1
+
+# ─ Salvar configuração ─
+if not DRY_RUN and total_removed > 0:
+    try:
+        print("\n[BR10] Salvando configuração...")
+        conn.send_command("do write", expect_string=r"#", read_timeout=30)
+        print("[BR10] Configuração salva com sucesso.")
+    except Exception as e:
+        print(f"[AVISO] Erro ao salvar configuração: {e}")
+
+conn.disconnect()
+print(f"\n[BR10] === Resumo ===")
+print(f"  ONUs removidas : {total_removed}")
+print(f"  Erros          : {total_errors}")
+print(f"  PONs afetadas  : {len(to_remove)}")
+if total_errors > 0:
+    sys.exit(1)
+'''
+
+
+def _build_zte_gpon_remove_offline_template() -> List[Dict[str, Any]]:
+    """Template de Playbook para remoção de ONUs offline/LOS em OLT ZTE via run_script."""
+    return [
+        {
+            'step_type': 'log',
+            'params': {'message': 'Iniciando varredura de ONUs offline/LOS na OLT ZTE {DEVICE_NAME} ({DEVICE_IP})'},
+            'label': 'Log de início',
+            'order': 0,
+        },
+        {
+            'step_type': 'run_script',
+            'params': {
+                'script_content': _ZTE_GPON_REMOVE_OFFLINE_SCRIPT.strip(),
+                'timeout': 600,
+                'inject_vars': True,
+            },
+            'label': 'Varrer PONs e remover ONUs offline/LOS (ZTE GPON)',
+            'order': 1,
+            'on_error': 'stop',
+        },
+        {
+            'step_type': 'telegram_send_message',
+            'params': {
+                'message': 'OLT {DEVICE_NAME} ({DEVICE_IP}): remoção de ONUs offline/LOS concluída em {DATETIME}.',
+            },
+            'label': 'Notificar Telegram',
+            'order': 2,
+            'on_error': 'continue',
+        },
+    ]
+
+
+# ─── Mapeamento de vendor (bkpolts) para label amigável ────────────────────────────────────
+VENDOR_LABELS: Dict[str, str] = {
+    "huawei":             "Huawei",
+    "zte":                "ZTE",
+    "zte_gpon_remove":    "ZTE GPON — Remover ONUs Offline",
+    "fiberhome":          "Fiberhome",
+    "datacom":            "Datacom",
+    "parks":              "Parks",
+    "intelbras_g16":      "Intelbras G16",
+}
 def import_script_to_playbook(
     content: str,
     filename: str = 'script.py',
@@ -1259,6 +1418,17 @@ def import_script_to_playbook(
         variables.setdefault('FTP_PASSWORD', '')
         name = 'Backup Parks OLT'
         protocol = 'telnet'
+
+    elif vendor == 'zte_gpon_remove':
+        all_steps = _build_zte_gpon_remove_offline_template()
+        variables.setdefault('SLOT_START', '1')
+        variables.setdefault('SLOT_END', '2')
+        variables.setdefault('PON_START', '1')
+        variables.setdefault('PON_END', '16')
+        variables.setdefault('DRY_RUN', 'false')
+        name = 'Remover ONUs Offline/LOS — ZTE GPON'
+        category = 'diagnostics'
+        protocol = 'script'
 
     # 8. Gerar descrição automática
     n_cmds = sum(1 for s in all_steps if s['step_type'] == 'send_command')

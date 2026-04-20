@@ -494,3 +494,24 @@ async def delete_user(
     await db.delete(user)
     await db.commit()
     return {"message": "Usuário removido com sucesso"}
+
+
+@router.post("/logout")
+async def logout(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Registra logout do usuário e invalida a sessão."""
+    ip_address = request.client.host if request.client else None
+
+    await log_audit(
+        db,
+        action=AuditAction.LOGOUT,
+        user_id=current_user.id,
+        description=f"Logout: {current_user.username}",
+        ip_address=ip_address,
+        status="success",
+    )
+
+    return {"message": "Logout realizado com sucesso"}

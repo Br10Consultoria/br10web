@@ -7,10 +7,10 @@
     box-sizing: border-box;
   }
 
-  /* ─── Fonte base reduzida: 13px (era 16px padrão do navegador) ───────────── */
+  /* ─── Fonte base reduzida: 14px (era 16px padrão do navegador) ───────────── */
   html {
     scroll-behavior: smooth;
-    font-size: 13px;
+    font-size: 14px;
   }
 
   body {

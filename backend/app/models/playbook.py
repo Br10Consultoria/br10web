@@ -42,7 +42,11 @@ class PlaybookStepType(str, enum.Enum):
     SCP_DOWNLOAD   = "scp_download"     # Baixar arquivo do dispositivo via SCP
 
     # Notificações
-    TELEGRAM_SEND_FILE = "telegram_send_file"  # Enviar arquivo ao Telegram
+    TELEGRAM_SEND_FILE    = "telegram_send_file"     # Enviar arquivo ao Telegram
+    TELEGRAM_SEND_MESSAGE = "telegram_send_message"  # Enviar mensagem de texto ao Telegram
+
+    # Automação avançada
+    RUN_SCRIPT = "run_script"  # Executar script Python diretamente no container
 
     # Utilitários
     SLEEP          = "sleep"            # Aguardar N segundos

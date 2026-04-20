@@ -16,6 +16,10 @@ import os
 import re
 import select as sel
 import socket
+import subprocess
+import sys
+import tempfile
+import textwrap
 import time
 from datetime import datetime
 from pathlib import Path
@@ -484,6 +488,8 @@ class PlaybookRunner:
             elif step_type == "log":
                 msg = params.get("message", "")
                 return True, msg, ""
+            elif step_type == "run_script":
+                return self._step_run_script(params)
             else:
                 return False, "", f"Tipo de passo desconhecido: {step_type}"
         except Exception as e:
@@ -756,6 +762,120 @@ class PlaybookRunner:
 
         except Exception as e:
             return False, "", f"Erro ao enviar para Telegram: {str(e)}"
+
+    def _step_run_script(self, params: Dict) -> Tuple[bool, str, str]:
+        """
+        Executa um script Python diretamente no container do backend.
+
+        Parâmetros:
+          script_content  — código Python completo do script
+          timeout         — timeout em segundos (default: 300)
+          inject_vars     — se True, injeta variáveis do playbook como variáveis de ambiente
+
+        Variáveis disponíveis no script via os.environ:
+          DEVICE_IP, DEVICE_NAME, CLIENT_NAME, USERNAME, PASSWORD,
+          DATE, DATETIME, e todas as variáveis extras do playbook.
+        """
+        script_content = params.get("script_content", "")
+        timeout = int(params.get("timeout", 300))
+        inject_vars = params.get("inject_vars", True)
+
+        if not script_content or not script_content.strip():
+            return False, "", "Conteúdo do script está vazio."
+
+        # Preparar variáveis de ambiente para injeção
+        env = os.environ.copy()
+        if inject_vars:
+            for key, value in self.variables.items():
+                env[key] = str(value)
+                # Aliases comuns usados em scripts
+                if key == "HOST":
+                    env["DEVICE_IP"] = str(value)
+                    env["OLT_IP"] = str(value)
+                elif key == "USERNAME":
+                    env["USER"] = str(value)
+                    env["LOGIN"] = str(value)
+                elif key == "PASSWORD":
+                    env["PASS"] = str(value)
+                    env["SENHA"] = str(value)
+
+        # Escrever script em arquivo temporário
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".py",
+            prefix="br10_script_",
+            delete=False,
+            encoding="utf-8",
+        ) as tmp:
+            tmp_path = tmp.name
+            tmp.write(script_content)
+
+        output_lines = []
+        error_output = ""
+        success = False
+
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, tmp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+
+            # Capturar stdout linha a linha e emitir via callback (streaming)
+            try:
+                for line in iter(proc.stdout.readline, ""):
+                    line = line.rstrip("\n")
+                    output_lines.append(line)
+                    # Emitir linha em tempo real via callback de streaming
+                    if self._on_step_callback:
+                        try:
+                            self._on_step_callback({
+                                "step": -1,  # -1 = linha de streaming, não novo passo
+                                "type": "run_script",
+                                "label": "[script]",
+                                "status": "running",
+                                "output": line,
+                                "error": "",
+                                "duration_ms": 0,
+                                "timestamp": datetime.now().isoformat(),
+                            })
+                        except Exception:
+                            pass
+                proc.stdout.close()
+            except Exception:
+                pass
+
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                return False, "\n".join(output_lines), f"Script excedeu o timeout de {timeout}s."
+
+            error_output = proc.stderr.read() if proc.stderr else ""
+            return_code = proc.returncode
+
+            full_output = "\n".join(output_lines)
+            if error_output:
+                full_output += f"\n\n[STDERR]\n{error_output[:2000]}"
+
+            if return_code == 0:
+                success = True
+                return True, full_output, ""
+            else:
+                return False, full_output, f"Script terminou com código {return_code}.\n{error_output[:500]}"
+
+        except Exception as e:
+            return False, "\n".join(output_lines), f"Erro ao executar script: {str(e)}"
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
     def _close_connections(self) -> None:
         if self._telnet:

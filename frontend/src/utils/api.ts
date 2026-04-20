@@ -11,7 +11,10 @@ const api = axios.create({
 })
 
 // ─── Controle de logout em andamento ─────────────────────────────────────────
+// IMPORTANTE: Este flag é resetado após o redirect para que futuras tentativas
+// de login não sejam bloqueadas silenciosamente.
 let isLoggingOut = false
+let networkToastId: string | null = null
 
 function triggerSessionExpired(reason: 'expired' | 'invalid' | 'no_token' = 'expired') {
   if (isLoggingOut) return
@@ -21,9 +24,9 @@ function triggerSessionExpired(reason: 'expired' | 'invalid' | 'no_token' = 'exp
   logout()
 
   const messages = {
-    expired:   'Sua sessão expirou. Faça login novamente.',
-    invalid:   'Token de sessão inválido. Faça login novamente.',
-    no_token:  'Sessão não encontrada. Faça login para continuar.',
+    expired:  'Sua sessão expirou. Faça login novamente.',
+    invalid:  'Token de sessão inválido. Faça login novamente.',
+    no_token: 'Sessão não encontrada. Faça login para continuar.',
   }
 
   toast.error(messages[reason], {
@@ -39,15 +42,35 @@ function triggerSessionExpired(reason: 'expired' | 'invalid' | 'no_token' = 'exp
   })
 
   setTimeout(() => {
+    // Resetar flag ANTES do redirect para que a página de login funcione
     isLoggingOut = false
     window.location.href = '/login'
   }, 1500)
 }
 
+function handleNetworkError() {
+  // Mostrar aviso de rede apenas uma vez (sem logout)
+  if (!networkToastId) {
+    networkToastId = toast.error(
+      'Sem conexão com o servidor. Verifique sua rede.',
+      {
+        id: 'network-error',
+        duration: 8000,
+        icon: '📡',
+        style: {
+          background: '#1e293b',
+          color: '#e2e8f0',
+          border: '1px solid #475569',
+          borderRadius: '0.75rem',
+        },
+      }
+    )
+    // Limpar referência após expirar
+    setTimeout(() => { networkToastId = null }, 8500)
+  }
+}
+
 // ─── Request interceptor ──────────────────────────────────────────────────────
-// Lê token do store (pós-hidratação) ou diretamente do localStorage (pré-hidratação).
-// Isso garante que chamadas feitas no mount via useEffect antes da hidratação
-// do Zustand ainda enviem o token correto.
 api.interceptors.request.use(
   (config) => {
     const { accessToken } = useAuthStore.getState()
@@ -63,14 +86,29 @@ api.interceptors.request.use(
 
 // ─── Response interceptor — refresh token automático ─────────────────────────
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Limpar toast de rede se a conexão voltou
+    if (networkToastId) {
+      toast.dismiss('network-error')
+      networkToastId = null
+    }
+    return response
+  },
   async (error) => {
     const originalRequest = error.config
+
+    // ── Erro de rede (sem response) — NÃO fazer logout ──────────────────────
+    // ERR_NETWORK, ERR_CONNECTION_REFUSED, timeout, etc.
+    if (!error.response) {
+      handleNetworkError()
+      return Promise.reject(error)
+    }
 
     // Não tentar refresh para o próprio endpoint de refresh ou login
     const isAuthEndpoint =
       originalRequest?.url?.includes('/auth/refresh') ||
-      originalRequest?.url?.includes('/auth/login')
+      originalRequest?.url?.includes('/auth/login') ||
+      originalRequest?.url?.includes('/auth/logout')
 
     if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true
@@ -99,7 +137,13 @@ api.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${access_token}`
           return api(originalRequest)
         } catch (refreshError: any) {
-          // Refresh falhou — sessão definitivamente expirada
+          // Refresh falhou — verificar se é erro de rede ou token expirado
+          if (!refreshError?.response) {
+            // Erro de rede durante o refresh — NÃO fazer logout
+            handleNetworkError()
+            return Promise.reject(refreshError)
+          }
+          // Token definitivamente expirado/inválido
           const status = refreshError?.response?.status
           triggerSessionExpired(status === 401 ? 'expired' : 'invalid')
         }
@@ -119,7 +163,8 @@ export default api
 export const authApi = {
   login: (data: { username: string; password: string; totp_code?: string }) =>
     api.post('/auth/login', data),
-  logout: () => api.post('/auth/logout'),
+  // logout: chama o backend se disponível, mas não falha se não existir
+  logout: () => api.post('/auth/logout').catch(() => Promise.resolve()),
   me: () => api.get('/auth/me'),
   setup2fa: () => api.post('/auth/2fa/setup'),
   verify2fa: (totp_code: string) => api.post('/auth/2fa/verify', { totp_code }),
